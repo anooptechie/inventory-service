@@ -178,3 +178,160 @@ Step 2 — Retry SAME request
 👉 Because:
 
 ❌ errors are NOT cached
+
+3. MANUAL TESTING (OUTBOX)
+
+🔹 Step 1 — Reset stock
+UPDATE stock
+SET quantity = 6
+WHERE product_id = '11111111-1111-1111-1111-111111111111';
+🔹 Step 2 — Trigger low stock
+curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: outbox-test" \
+  -d '{"adjustment": -2, "reason": "sale"}'
+
+👉 Now quantity = 4 (<= threshold 5)
+
+🔹 Step 3 — Check DB
+SELECT type, status FROM outbox_events;
+
+👉 Expected:
+
+inventory.low_stock | PENDING
+🔹 Step 4 — Run worker
+node src/workers/outboxWorker.js
+
+Wait ~5 seconds
+
+🔹 Step 5 — Check again
+SELECT type, status FROM outbox_events;
+
+👉 Expected:
+
+inventory.low_stock | DELIVERED
+
+4. MANUAL TESTING (ORDER CREATED)
+
+🧱 TEST 0 — Setup (VERY IMPORTANT)
+
+Reset clean state:
+
+-- reset stock
+UPDATE stock
+SET quantity = 10
+WHERE product_id = '11111111-1111-1111-1111-111111111111';
+
+-- clear orders
+DELETE FROM order_items;
+DELETE FROM orders;
+🧪 TEST 1 — Happy Path (Order Creation)
+Request
+curl -X POST http://localhost:5000/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: order-test-1" \
+  -d '{
+    "items": [
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 2
+      }
+    ]
+  }' | jq
+✅ Expected
+Status = PENDING
+totalAmount = 200
+🔍 Verify DB
+SELECT * FROM orders;
+SELECT * FROM order_items;
+
+👉 Should show:
+
+1 order
+1 item
+⚠️ IMPORTANT CHECK
+SELECT quantity FROM stock;
+
+👉 Should still be:
+
+10
+
+✔ No deduction yet
+
+🧪 TEST 2 — Insufficient Stock
+Request
+curl -X POST http://localhost:5000/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: order-test-2" \
+  -d '{
+    "items": [
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 100
+      }
+    ]
+  }' | jq
+✅ Expected
+{
+  "error": "INSUFFICIENT_STOCK",
+  "available": 10,
+  "requested": 100
+}
+🔍 Verify DB
+SELECT * FROM orders;
+
+👉 Should still be:
+
+Only 1 order (from previous test)
+
+✔ No partial writes
+
+🧪 TEST 3 — Idempotency (CRITICAL)
+First request
+-H "X-Idempotency-Key: order-test-3"
+Second request (same key)
+
+👉 Run SAME curl again
+
+✅ Expected
+SAME response
+NO new order created
+🔍 Verify DB
+SELECT COUNT(*) FROM orders;
+
+👉 Should increase by 1 only
+
+🧪 TEST 4 — Different Key
+-H "X-Idempotency-Key: order-test-4"
+✅ Expected
+New order created
+🧪 TEST 5 — Multiple Items
+curl -X POST http://localhost:5000/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: order-test-5" \
+  -d '{
+    "items": [
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 2
+      },
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 1
+      }
+    ]
+  }' | jq
+✅ Expected
+totalAmount = 300
+2 order_items rows
+🧪 TEST 6 — Invalid Input
+Empty items
+-d '{ "items": [] }'
+
+👉 Expect:
+
+{
+  "error": "INVALID_ITEMS"
+}
+
+5. MANUAL TESTING (ORDER CONFIRMED)

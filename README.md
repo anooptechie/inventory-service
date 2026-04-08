@@ -264,9 +264,77 @@ Event Schema
 
 ---
 
-## 📌 Next Steps
-* Order lifecycle (create, confirm, cancel, fulfil)
+## 🛒 Orders — Creation (PENDING State)
 
+The system supports creating customer orders with strong guarantees around consistency, validation, and idempotency.
+
+### Approach
+
+* Orders are created with status `PENDING`
+* Stock is **validated but NOT deducted** during creation
+* Product prices are fetched and stored as a snapshot (`unit_price`)
+* All operations are executed inside a single database transaction
+* Idempotency is enforced using `X-Idempotency-Key`
+
+---
+
+### Flow
+
+1. Idempotency middleware checks for duplicate request  
+2. Begin transaction  
+3. Lock stock rows using `SELECT FOR UPDATE`  
+4. Validate stock availability for each item  
+5. Fetch product prices  
+6. Insert into `orders` table  
+7. Insert into `order_items` table  
+8. Commit transaction  
+
+---
+
+### Guarantees
+
+* No partial orders (atomic transaction)  
+* No duplicate orders (idempotency)  
+* No overselling during validation  
+* Price consistency via snapshot (historical accuracy)  
+
+---
+
+### Important Design Decision
+
+Stock is **not deducted during order creation**.
+
+```text
+POST /orders → validate only
+POST /orders/:id/confirm → deduct stock
+
+This avoids premature stock reservation and keeps the system simpler for the current scope.
+
+Example
+Request
+POST /orders
+X-Idempotency-Key: order-123
+{
+  "items": [
+    {
+      "productId": "uuid",
+      "quantity": 2
+    }
+  ]
+}
+Response
+{
+  "orderId": "uuid",
+  "status": "PENDING",
+  "totalAmount": 200,
+  "items": [
+    {
+      "productId": "uuid",
+      "quantity": 2,
+      "unit_price": 100
+    }
+  ]
+}
 ---
 
 ## 📎 Note

@@ -2,6 +2,8 @@ const express = require("express");
 const pool = require("./db/postgres");
 const redis = require("./db/redis");
 const stockRoutes = require("./api/routes/stock.routes");
+const orderRoutes = require("./api/routes/order.routes");
+
 
 
 const app = express();
@@ -26,5 +28,6 @@ app.get("/health", async (req, res) => {
 });
 
 app.use("/stock", stockRoutes);
+app.use("/orders", orderRoutes);
 
 module.exports = app;
