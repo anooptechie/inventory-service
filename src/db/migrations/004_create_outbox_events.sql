@@ -1,0 +1,12 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS outbox_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type VARCHAR(100) NOT NULL,
+  payload JSONB NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at TIMESTAMPTZ
+);

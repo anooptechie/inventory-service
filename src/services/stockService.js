@@ -1,4 +1,5 @@
 const pool = require("../db/postgres");
+const { writeEvent } = require("./outboxService");
 
 const adjustStock = async ({ productId, adjustment, reason, userId }) => {
   const client = await pool.connect();
@@ -47,6 +48,14 @@ const adjustStock = async ({ productId, adjustment, reason, userId }) => {
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [productId, adjustment, stock.quantity, newQty, reason, userId]
     );
+
+    if (newQty <= stock.low_stock_threshold) {
+      await writeEvent(client, "inventory.low_stock", {
+        productId,
+        quantity: newQty,
+        threshold: stock.low_stock_threshold,
+      });
+    }
 
     await client.query("COMMIT");
 

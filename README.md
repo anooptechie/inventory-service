@@ -189,9 +189,82 @@ Retry (same key)
 
 ---
 
-## 📌 Next Steps
+## 📤 Outbox Pattern (Reliable Event Delivery)
 
-* Outbox pattern implementation (guaranteed event delivery)
+The system ensures that events are reliably delivered even in the presence of failures, crashes, or network issues.
+
+### Problem
+
+Directly sending events after database updates can lead to inconsistencies:
+
+* Stock updated in DB ✅  
+* Event fails to send ❌  
+* System becomes inconsistent
+
+This is known as the **dual-write problem**.
+
+---
+
+### Approach
+
+* Events are written to an `outbox_events` table **within the same database transaction**
+* A background worker continuously polls pending events
+* Events are delivered asynchronously and marked as `DELIVERED`
+
+---
+
+### Flow
+
+1. Begin transaction  
+2. Update stock  
+3. Insert audit log (`stock_movements`)  
+4. Insert event into `outbox_events`  
+5. Commit transaction  
+
+Worker:
+
+1. Fetch `PENDING` events  
+2. Deliver event (simulated / external service)  
+3. Mark as `DELIVERED`  
+
+---
+
+### Guarantees
+
+* No event loss after successful DB commit  
+* Safe handling of service crashes  
+* Events are retried until successfully delivered  
+* Eliminates dual-write inconsistency  
+
+---
+
+### Example Scenario
+
+Stock drops below threshold:
+
+```text
+Stock: 6 → 4 (threshold = 5)
+
+Result:
+
+Stock updated in DB
+inventory.low_stock event inserted into outbox
+Worker processes event asynchronously
+Event marked as DELIVERED
+Event Schema
+{
+  "type": "inventory.low_stock",
+  "payload": {
+    "productId": "uuid",
+    "quantity": 4,
+    "threshold": 5
+  },
+  "status": "PENDING"
+}
+
+---
+
+## 📌 Next Steps
 * Order lifecycle (create, confirm, cancel, fulfil)
 
 ---
