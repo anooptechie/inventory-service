@@ -337,6 +337,68 @@ Response
 }
 ---
 
+## ✅ Orders — Confirmation (CONFIRMED)
+
+Order confirmation is the **core business operation** where stock is actually deducted and the system transitions an order from `PENDING` → `CONFIRMED`.
+
+---
+
+### Approach
+
+* Executed inside a single database transaction
+* Locks stock rows using `SELECT FOR UPDATE`
+* Deducts stock safely under concurrency
+* Records audit logs in `stock_movements`
+* Triggers outbox events when stock falls below threshold
+* Updates order status → `CONFIRMED`
+
+---
+
+### Flow
+
+1. Fetch order and validate state (`PENDING` only)
+2. Fetch order items
+3. Lock stock rows (`SELECT FOR UPDATE`)
+4. Validate stock availability
+5. Deduct stock
+6. Insert audit log (`stock_movements`)
+7. Insert outbox event (if low stock threshold reached)
+8. Update order status to `CONFIRMED`
+9. Commit transaction
+
+---
+
+### Guarantees
+
+* No overselling during confirmation
+* No partial updates (atomic transaction)
+* Full audit trail for stock changes
+* Reliable event delivery via Outbox Pattern
+* Prevents invalid state transitions (only `PENDING` → `CONFIRMED`)
+
+---
+
+### Example
+
+#### Request
+
+```http
+POST /orders/:id/confirm
+```
+
+---
+
+#### Response
+
+```json
+{
+  "orderId": "uuid",
+  "status": "CONFIRMED"
+}
+```
+---
+
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.

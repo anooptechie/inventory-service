@@ -335,3 +335,126 @@ Empty items
 }
 
 5. MANUAL TESTING (ORDER CONFIRMED)
+
+🧪 STEP-BY-STEP: TEST ORDER CONFIRM
+🧱 STEP 0 — Make sure server is running
+npm run dev
+
+👉 You should see:
+
+Server running on port 5000
+🧱 STEP 1 — Reset DB state
+
+Open psql:
+
+docker exec -it <your-postgres-container> psql -U inv_user -d inv_db
+Reset everything clean:
+DELETE FROM order_items;
+DELETE FROM orders;
+
+UPDATE stock
+SET quantity = 10
+WHERE product_id = '11111111-1111-1111-1111-111111111111';
+🧱 STEP 2 — Verify initial state
+SELECT quantity FROM stock;
+
+👉 Expected:
+
+10
+🧱 STEP 3 — Create order
+curl -X POST http://localhost:5000/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: confirm-test-1" \
+  -d '{
+    "items": [
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 3
+      }
+    ]
+  }' | jq
+✅ Expected response
+{
+  "orderId": "SOME_UUID",
+  "status": "PENDING",
+  "totalAmount": 300
+}
+
+👉 COPY THIS orderId
+
+🧱 STEP 4 — Verify order in DB
+SELECT id, status FROM orders;
+
+👉 Expected:
+
+PENDING
+🧱 STEP 5 — Confirm order
+
+Replace <ORDER_ID>:
+
+curl -X POST http://localhost:5000/orders/<ORDER_ID>/confirm | jq
+✅ Expected response
+{
+  "orderId": "<ORDER_ID>",
+  "status": "CONFIRMED"
+}
+🧱 STEP 6 — Verify stock deduction
+SELECT quantity FROM stock;
+
+👉 Expected:
+
+7
+
+(10 - 3 = 7)
+
+🧱 STEP 7 — Verify audit log
+SELECT product_id, adjustment, quantity_before, quantity_after
+FROM stock_movements
+ORDER BY created_at DESC
+LIMIT 1;
+
+👉 Expected:
+
+adjustment: -3
+before: 10
+after: 7
+🧱 STEP 8 — Verify order status
+SELECT status FROM orders WHERE id = '<ORDER_ID>';
+
+👉 Expected:
+
+CONFIRMED
+🧱 STEP 9 — Verify outbox (if threshold hit)
+
+If stock ≤ threshold:
+
+SELECT type, status FROM outbox_events;
+
+👉 Expected:
+
+inventory.low_stock | PENDING or DELIVERED
+
+🔥 EXTRA TESTS (IMPORTANT)
+❌ Test: Confirm again (should fail)
+curl -X POST http://localhost:5000/orders/<ORDER_ID>/confirm | jq
+
+👉 Expected:
+
+{
+  "error": "INVALID_ORDER_STATE"
+}
+❌ Test: Insufficient stock during confirm
+Step 1 — Create big order
+curl -X POST http://localhost:5000/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: confirm-test-2" \
+  -d '{
+    "items": [
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 20
+      }
+    ]
+  }'
+
+👉 Should fail at creation OR confirm

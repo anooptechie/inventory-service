@@ -90,4 +90,115 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
     }
 };
 
-module.exports = { createOrder };
+const confirmOrder = async ({ orderId, userId }) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // 🔹 Step 1 — Get order
+    const orderRes = await client.query(
+      `SELECT * FROM orders WHERE id = $1`,
+      [orderId]
+    );
+
+    if (orderRes.rows.length === 0) {
+      throw { status: 404, code: "ORDER_NOT_FOUND" };
+    }
+
+    const order = orderRes.rows[0];
+
+    if (order.status !== "PENDING") {
+      throw {
+        status: 400,
+        code: "INVALID_ORDER_STATE",
+      };
+    }
+
+    // 🔹 Step 2 — Get order items
+    const itemsRes = await client.query(
+      `SELECT * FROM order_items WHERE order_id = $1`,
+      [orderId]
+    );
+
+    const items = itemsRes.rows;
+
+    // 🔹 Step 3 — Deduct stock (WITH LOCK)
+    for (const item of items) {
+      const stockRes = await client.query(
+        `SELECT quantity, low_stock_threshold
+         FROM stock
+         WHERE product_id = $1
+         FOR UPDATE`,
+        [item.product_id]
+      );
+
+      const stock = stockRes.rows[0];
+
+      if (stock.quantity < item.quantity) {
+        throw {
+          status: 409,
+          code: "INSUFFICIENT_STOCK",
+          available: stock.quantity,
+          requested: item.quantity,
+        };
+      }
+
+      const newQty = stock.quantity - item.quantity;
+
+      // update stock
+      await client.query(
+        `UPDATE stock
+         SET quantity = $1, updated_at = NOW()
+         WHERE product_id = $2`,
+        [newQty, item.product_id]
+      );
+
+      // audit log
+      await client.query(
+        `INSERT INTO stock_movements
+         (product_id, adjustment, quantity_before, quantity_after, reason, performed_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          item.product_id,
+          -item.quantity,
+          stock.quantity,
+          newQty,
+          "sale",
+          userId,
+        ]
+      );
+
+      // 🔥 outbox trigger
+      if (newQty <= stock.low_stock_threshold) {
+        await writeEvent(client, "inventory.low_stock", {
+          productId: item.product_id,
+          quantity: newQty,
+          threshold: stock.low_stock_threshold,
+        });
+      }
+    }
+
+    // 🔹 Step 4 — Update order status
+    await client.query(
+      `UPDATE orders
+       SET status = 'CONFIRMED'
+       WHERE id = $1`,
+      [orderId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      orderId,
+      status: "CONFIRMED",
+    };
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+module.exports = { createOrder, confirmOrder };
