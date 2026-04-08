@@ -473,6 +473,76 @@ Response
 
 ---
 
+---
+
+## 🛡️ Data Integrity & Performance Optimizations
+
+The system incorporates database-level constraints and indexing to ensure consistency and scalability.
+
+### Foreign Key Constraints
+
+* Enforced relationships between tables:
+  * `order_items.order_id → orders.id`
+  * `order_items.product_id → products.id`
+* Prevents invalid or orphaned records
+* Ensures referential integrity at the database level
+
+---
+
+### Indexing Strategy
+
+Indexes are added to optimize frequently accessed queries:
+
+* `stock(product_id)` → fast stock lookup
+* `orders(status)` → efficient filtering by lifecycle state
+* `outbox_events(status)` → optimized worker polling
+* `orders(idempotency_key)` → faster idempotency checks
+
+---
+
+### Idempotent Migrations
+
+* All migrations are designed to be safe for repeated execution
+* Uses conditional checks (`IF NOT EXISTS`) to avoid duplication errors
+* Ensures compatibility with CI/CD pipelines and multiple environments
+
+---
+
+### Event Optimization (Threshold Crossing)
+
+Low-stock events are triggered only when stock crosses the threshold:
+
+```text
+Before: Triggered repeatedly below threshold ❌
+After: Triggered only on crossing (e.g., 8 → 4) ✅
+
+This prevents event flooding and ensures meaningful notifications
+
+# ✅ 2. UPDATE — Order Confirmation (Enhance it)
+
+👉 Add THIS inside your **Order Confirm section → Guarantees**
+
+```md
+* Prevents duplicate low-stock events via threshold crossing logic  
+* Ensures referential integrity through foreign key constraints  
+* Optimized query performance using database indexes 
+
+---
+
+## 📊 Error Handling & Observability
+
+The API implements consistent error handling and logging for easier debugging and reliability.
+
+### Standard Error Format
+
+All endpoints return structured error responses:
+
+```json
+{
+  "error": "ERROR_CODE",
+  "message": "Human-readable message"
+}
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.
