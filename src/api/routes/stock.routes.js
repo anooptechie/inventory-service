@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const { adjustStock } = require("../../services/stockService");
+const idempotency = require("../middlewares/idempotency");
 
 // simple UUID regex
 const isUUID = (id) =>
@@ -10,7 +11,7 @@ const isUUID = (id) =>
 // allowed reasons
 const VALID_REASONS = ["sale", "restock", "return", "correction", "damage"];
 
-router.patch("/:productId", async (req, res) => {
+router.patch("/:productId", idempotency("stock"), async (req, res) => {
   try {
     const { productId } = req.params;
     const { adjustment, reason } = req.body;

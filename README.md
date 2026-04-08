@@ -134,9 +134,63 @@ This ensures correctness even under high concurrency.
 
 ---
 
+## 🔁 Idempotency (Retry-Safe Operations)
+
+The system ensures that repeated requests (due to retries, network failures, or duplicate submissions) do not cause unintended side effects.
+
+### Approach
+
+* Clients must send an `X-Idempotency-Key` header with each request
+* Requests are cached in Redis using a scoped key (`idempotency:<resource>:<key>`)
+* If the same key is received again:
+  * The cached response is returned
+  * The underlying business logic is NOT executed again
+
+### Guarantees
+
+* No duplicate stock deductions
+* Safe retries for network failures
+* Deterministic responses for repeated requests
+
+### Behavior
+
+| Scenario | Result |
+|--------|--------|
+| Same key + same request | Cached response returned |
+| Different key | New execution |
+| Missing key | `400 IDEMPOTENCY_KEY_REQUIRED` |
+| Failed request (4xx/5xx) | Not cached (can be retried safely) |
+
+### Example
+
+#### Request
+
+```http
+PATCH /stock/:productId
+X-Idempotency-Key: test-123
+{
+  "adjustment": -2,
+  "reason": "sale"
+}
+First Call
+{
+  "productId": "uuid",
+  "quantity": 8,
+  "threshold": 5
+}
+Retry (same key)
+{
+  "productId": "uuid",
+  "quantity": 8,
+  "threshold": 5
+}
+
+👉 No additional stock deduction occurs.
+
+---
+
 ## 📌 Next Steps
 
-* Idempotency middleware (safe retries for stock & orders)
 * Outbox pattern implementation (guaranteed event delivery)
 * Order lifecycle (create, confirm, cancel, fulfil)
 

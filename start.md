@@ -1,4 +1,4 @@
-1. — Manual Testing (FULL WALKTHROUGH)
+1. — Manual Testing (CONCURRENCY FULL WALKTHROUGH)
 ✅ Step 0 — Make sure server is running
 npm run dev
 
@@ -11,6 +11,8 @@ You need one stock row to test against.
 
 Option A — Using psql (recommended)
 psql -U inv_user -d inv_db
+
+docker exec -it <your-postgres-container-name> psql -U inv_user -d inv_db
 
 👉 Then run:
 
@@ -47,6 +49,7 @@ curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
 👉 Expected:
 
 quantity becomes 12
+
 🚫 Step 4 — Test insufficient stock (IMPORTANT)
 
 Try to deduct more than available:
@@ -82,6 +85,16 @@ Run this in both quickly:
 curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
   -H "Content-Type: application/json" \
   -d '{"adjustment": -5, "reason": "sale"}'
+
+  OR
+
+for i in {1..10}; do
+  curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+    -H "Content-Type: application/json" \
+    -d '{"adjustment": -2, "reason": "sale"}' &
+done
+wait
+
 ✅ What should happen
 One request succeeds
 Other may fail (if stock insufficient)
@@ -99,5 +112,69 @@ quantity_before
 quantity_after
 reason
 
-2. MANUAL TESTING
-clear
+
+
+2. MANUAL TESTING (IDEMPOTENCY)
+🧪 Test Case 1 — Same Key (CORE TEST)
+Step 1 — First request
+curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: test-123" \
+  -d '{"adjustment": -2, "reason": "sale"}'
+
+👉 Example response:
+
+{
+  "productId": "11111111-1111-1111-1111-111111111111",
+  "quantity": 8,
+  "threshold": 5
+}
+Step 2 — SAME request again (same key)
+curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: test-123" \
+  -d '{"adjustment": -2, "reason": "sale"}'
+✅ Expected
+SAME response as before ✅
+Stock should NOT decrease again ❌
+Step 3 — Verify DB
+SELECT quantity FROM stock
+WHERE product_id = '11111111-1111-1111-1111-111111111111';
+
+👉 Should remain unchanged after second request
+
+🧪 Test Case 2 — Different Key
+curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: test-456" \
+  -d '{"adjustment": -2, "reason": "sale"}'
+
+👉 Expected:
+
+Stock decreases again ✅
+🧪 Test Case 3 — Missing Key
+curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+  -H "Content-Type: application/json" \
+  -d '{"adjustment": -2, "reason": "sale"}'
+✅ Expected
+{
+  "error": "IDEMPOTENCY_KEY_REQUIRED"
+}
+🧪 Test Case 4 — Error should NOT be cached
+Step 1 — Force failure
+curl -X PATCH http://localhost:5000/stock/11111111-1111-1111-1111-111111111111 \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: test-error" \
+  -d '{"adjustment": -999, "reason": "sale"}'
+
+👉 Expected:
+
+INSUFFICIENT_STOCK
+Step 2 — Retry SAME request
+(same command)
+✅ Expected
+
+👉 It should run again, not return cached response
+👉 Because:
+
+❌ errors are NOT cached
