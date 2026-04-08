@@ -1,0 +1,10 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS stock (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id UUID UNIQUE NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+  low_stock_threshold INTEGER NOT NULL DEFAULT 10,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+

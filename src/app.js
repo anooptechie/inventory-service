@@ -1,6 +1,8 @@
 const express = require("express");
 const pool = require("./db/postgres");
 const redis = require("./db/redis");
+const stockRoutes = require("./api/routes/stock.routes");
+
 
 const app = express();
 app.use(express.json());
@@ -22,5 +24,7 @@ app.get("/health", async (req, res) => {
     });
   }
 });
+
+app.use("/stock", stockRoutes);
 
 module.exports = app;
