@@ -1,0 +1,2 @@
+CREATE INDEX idx_orders_idempotency_key
+ON orders(idempotency_key);
