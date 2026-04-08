@@ -398,6 +398,80 @@ POST /orders/:id/confirm
 ```
 ---
 
+I need README Info on implementation of ORDER Cancel and ORDER FULLFILLED!
+
+Perfect — here are clean, professional README sections for both Cancel and Fulfil 👇
+(Just paste them under your Orders section)
+
+❌ Orders — Cancellation (CANCELLED)
+
+Orders can be cancelled only before confirmation, ensuring no impact on stock or system consistency.
+
+Approach
+Cancellation is allowed only when order status is PENDING
+Executed inside a database transaction
+Updates order status → CANCELLED
+No stock updates or audit logs required
+
+Flow
+Fetch order by ID
+Validate existence
+Check status is PENDING
+Update order status → CANCELLED
+Commit transaction
+
+Guarantees
+Prevents cancellation after stock deduction
+No side effects on inventory
+Ensures valid state transitions only
+No partial updates (transactional safety)
+
+Example
+Request
+POST /orders/:id/cancel
+
+Response
+{
+  "orderId": "uuid",
+  "status": "CANCELLED"
+}
+
+---
+
+📦 Orders — Fulfilment (FULFILLED)
+
+Order fulfilment represents the final stage of the order lifecycle after successful confirmation.
+
+Approach
+Fulfilment is allowed only when order status is CONFIRMED
+Executed inside a database transaction
+Updates order status → FULFILLED
+No stock changes (already deducted during confirmation)
+
+Flow
+Fetch order by ID
+Validate existence
+Check status is CONFIRMED
+Update order status → FULFILLED
+Commit transaction
+
+Guarantees
+Prevents fulfilment of unconfirmed orders
+Maintains correct order lifecycle transitions
+No duplicate or invalid state changes
+Transactional integrity
+
+Example
+Request
+POST /orders/:id/fulfil
+
+Response
+{
+  "orderId": "uuid",
+  "status": "FULFILLED"
+}
+
+---
 
 ## 📎 Note
 

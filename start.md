@@ -458,3 +458,94 @@ curl -X POST http://localhost:5000/orders \
   }'
 
 👉 Should fail at creation OR confirm
+
+6. MANUAL TESTING (ORDER CANCEL)
+🧪 TEST: Cancel a PENDING Order
+🧱 STEP 1 — Reset clean state
+
+Open psql:
+
+docker exec -it <your-postgres-container> psql -U inv_user -d inv_db
+
+Run:
+
+DELETE FROM order_items;
+DELETE FROM orders;
+
+UPDATE stock
+SET quantity = 10
+WHERE product_id = '11111111-1111-1111-1111-111111111111';
+🧱 STEP 2 — Create a PENDING order
+curl -X POST http://localhost:5000/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: cancel-test-1" \
+  -d '{
+    "items": [
+      {
+        "productId": "11111111-1111-1111-1111-111111111111",
+        "quantity": 2
+      }
+    ]
+  }' | jq
+✅ Expected
+{
+  "orderId": "SOME_UUID",
+  "status": "PENDING"
+}
+
+👉 Copy the orderId
+
+🧱 STEP 3 — Verify it's PENDING
+SELECT id, status FROM orders;
+
+👉 Expected:
+
+PENDING
+🧱 STEP 4 — Cancel the order
+
+Replace <ORDER_ID>:
+
+curl -X POST http://localhost:5000/orders/<ORDER_ID>/cancel | jq
+✅ Expected
+{
+  "orderId": "<ORDER_ID>",
+  "status": "CANCELLED"
+}
+🧱 STEP 5 — Verify in DB
+SELECT id, status FROM orders WHERE id = '<ORDER_ID>';
+
+👉 Expected:
+
+CANCELLED
+🧠 VERY IMPORTANT CHECK
+Stock should NOT change
+SELECT quantity FROM stock;
+
+👉 Expected:
+
+10
+
+✔ Because cancel happens before deduction
+
+❌ EXTRA TEST — Cancel again
+curl -X POST http://localhost:5000/orders/<ORDER_ID>/cancel | jq
+✅ Expected
+{
+  "error": "INVALID_ORDER_STATE"
+}
+
+7. MANUAL TESTING (ORDER FULLFILLED)
+SELECT id, status FROM orders;
+curl -X POST http://localhost:5000/orders/<ORDER_ID>/confirm | jq
+✅ Expected
+{
+  "orderId": "...",
+  "status": "FULFILLED"
+}
+curl -X POST http://localhost:5000/orders/<ORDER_ID>/fulfil | jq
+
+✅ Expected
+{
+  "orderId": "...",
+  "status": "FULFILLED"
+}
