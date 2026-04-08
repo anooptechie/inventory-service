@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-const { createOrder, confirmOrder } = require("../../services/orderService");
+const { createOrder, confirmOrder, cancelOrder, fulfilOrder } = require("../../services/orderService");
 const idempotency = require("../middlewares/idempotency");
 
 // basic validation
@@ -63,4 +63,33 @@ router.post("/:id/confirm", async (req, res) => {
   }
 });
 
+router.post("/:id/cancel", async (req, res) => {
+  try {
+    const orderId = req.params.id;
+
+    const result = await cancelOrder({ orderId });
+
+    res.status(200).json(result);
+
+  } catch (err) {
+    res.status(err.status || 500).json({
+      error: err.code || "INTERNAL_SERVER_ERROR",
+    });
+  }
+});
+
+router.post("/:id/fulfil", async (req, res) => {
+  try {
+    const orderId = req.params.id;
+
+    const result = await fulfilOrder({ orderId });
+
+    res.status(200).json(result);
+
+  } catch (err) {
+    res.status(err.status || 500).json({
+      error: err.code || "INTERNAL_SERVER_ERROR",
+    });
+  }
+});
 module.exports = router;

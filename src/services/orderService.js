@@ -201,4 +201,96 @@ const confirmOrder = async ({ orderId, userId }) => {
     client.release();
   }
 };
-module.exports = { createOrder, confirmOrder };
+
+const cancelOrder = async ({ orderId }) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const res = await client.query(
+      `SELECT status FROM orders WHERE id = $1`,
+      [orderId]
+    );
+
+    if (res.rows.length === 0) {
+      throw { status: 404, code: "ORDER_NOT_FOUND" };
+    }
+
+    const order = res.rows[0];
+
+    if (order.status !== "PENDING") {
+      throw {
+        status: 400,
+        code: "INVALID_ORDER_STATE",
+      };
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'CANCELLED'
+       WHERE id = $1`,
+      [orderId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      orderId,
+      status: "CANCELLED",
+    };
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+const fulfilOrder = async ({ orderId }) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const res = await client.query(
+      `SELECT status FROM orders WHERE id = $1`,
+      [orderId]
+    );
+
+    if (res.rows.length === 0) {
+      throw { status: 404, code: "ORDER_NOT_FOUND" };
+    }
+
+    const order = res.rows[0];
+
+    if (order.status !== "CONFIRMED") {
+      throw {
+        status: 400,
+        code: "INVALID_ORDER_STATE",
+      };
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'FULFILLED'
+       WHERE id = $1`,
+      [orderId]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      orderId,
+      status: "FULFILLED",
+    };
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+module.exports = { createOrder, confirmOrder, cancelOrder, fulfilOrder };
