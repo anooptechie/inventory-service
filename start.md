@@ -671,3 +671,5 @@ curl -X DELETE http://localhost:5000/categories/$CATEGORY_ID
 curl http://localhost:5000/categories | jq
 
 👉 Category should NOT appear
+
+
