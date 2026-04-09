@@ -549,3 +549,125 @@ curl -X POST http://localhost:5000/orders/<ORDER_ID>/fulfil | jq
   "orderId": "...",
   "status": "FULFILLED"
 }
+
+7. MANUAL TESTING (Catergory and Products)
+
+🔥 STEP 0 — Clean Reset (IMPORTANT)
+docker compose down -v
+docker compose up -d
+node src/db/migrate.js
+npm run dev
+
+🧪 STEP 1 — Create Category
+curl -X POST http://localhost:5000/categories \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Electronics", "description": "Devices"}'
+
+✅ Copy this:
+CATEGORY_ID=<paste-id-here>
+
+🧪 STEP 2 — Create Product (with stock auto-create)
+curl -X POST http://localhost:5000/products \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"iPhone 15\",
+    \"sku\": \"IPHONE-001\",
+    \"price\": 1000,
+    \"categoryId\": \"$CATEGORY_ID\"
+  }"
+
+✅ Copy this:
+PRODUCT_ID=<paste-id-here>
+
+🧪 STEP 3 — Verify Stock Auto-Creation (CRITICAL)
+curl http://localhost:5000/stock/$PRODUCT_ID
+✅ Expected
+{
+  "productId": "...",
+  "quantity": 0,
+  "threshold": 10
+}
+
+👉 This proves:
+
+transaction worked
+stock row created automatically
+
+🧪 STEP 4 — Get Categories (Pagination)
+curl http://localhost:5000/categories | jq
+✅ Expected
+{
+  "data": [...],
+  "meta": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "hasNext": false
+  }
+}
+
+🧪 STEP 5 — Update Category
+curl -X PATCH http://localhost:5000/categories/$CATEGORY_ID \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Updated Electronics"}'
+
+🧪 STEP 6 — Get All Products
+curl http://localhost:5000/products | jq
+✅ Expected
+{
+  "data": [
+    {
+      "name": "iPhone 15",
+      "quantity": 0
+    }
+  ],
+  "meta": { ... }
+}
+
+🧪 STEP 7 — Get Product by ID
+curl http://localhost:5000/products/$PRODUCT_ID | jq
+✅ Expected
+{
+  "id": "...",
+  "name": "iPhone 15",
+  "sku": "IPHONE-001",
+  "price": "1000.00",
+  "quantity": 0
+}
+
+🧪 STEP 8 — Search Filter
+curl "http://localhost:5000/products?search=iPhone" | jq
+🧪 STEP 9 — Category Filter
+curl "http://localhost:5000/products?category=$CATEGORY_ID" | jq
+🧪 STEP 10 — Negative Test (Duplicate SKU)
+curl -X POST http://localhost:5000/products \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"Another iPhone\",
+    \"sku\": \"IPHONE-001\",
+    \"price\": 900,
+    \"categoryId\": \"$CATEGORY_ID\"
+  }"
+✅ Expected
+{
+  "error": "duplicate key value..."
+}
+🧪 STEP 11 — Invalid Category
+curl -X POST http://localhost:5000/products \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Invalid Product",
+    "sku": "TEST-123",
+    "price": 100,
+    "categoryId": "invalid-uuid"
+  }'
+✅ Expected
+{
+  "error": "INVALID_CATEGORY_ID"
+}
+🧪 STEP 12 — Soft Delete Category
+curl -X DELETE http://localhost:5000/categories/$CATEGORY_ID
+🧪 STEP 13 — Verify Soft Delete
+curl http://localhost:5000/categories | jq
+
+👉 Category should NOT appear

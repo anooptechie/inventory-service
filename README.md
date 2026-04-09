@@ -543,6 +543,127 @@ All endpoints return structured error responses:
   "message": "Human-readable message"
 }
 
+---
+
+## 📦 Categories & Products (Milestone 2)
+
+The system provides a complete domain layer for managing categories and products, forming the foundation for stock and order operations.
+
+---
+
+### 🗂️ Categories — CRUD (Soft Delete)
+
+Categories represent logical groupings of products.
+
+#### Features
+
+* Create categories with name and optional description  
+* Fetch categories with pagination  
+* Update category details  
+* Soft delete using `is_active = false`  
+
+#### Guarantees
+
+* No hard deletes (data is preserved for integrity and auditability)  
+* Only active categories are returned in queries  
+* Consistent pagination response format  
+
+---
+
+### 📦 Products — Creation (Transactional)
+
+Products are created with strong guarantees ensuring consistency with stock.
+
+#### Approach
+
+* Product creation is executed inside a database transaction  
+* Each product is linked to a valid category  
+* A corresponding stock row is automatically created  
+
+#### Flow
+
+1. Validate input (name, SKU, price, categoryId)  
+2. Validate category existence  
+3. Begin transaction  
+4. Insert product into `products` table  
+5. Insert stock row into `stock` table (quantity = 0, default threshold)  
+6. Commit transaction  
+
+#### Guarantees
+
+* Product and stock are always created together (no partial state)  
+* Referential integrity enforced via category validation  
+* SKU uniqueness enforced at database level  
+* Prevents orphaned products without stock  
+
+---
+
+### 🔍 Products — Read APIs
+
+#### GET /products
+
+Supports:
+
+* Pagination (`page`, `limit`)  
+* Search (`name ILIKE`)  
+* Category filtering  
+
+#### Response Format
+
+```json
+{
+  "data": [...],
+  "meta": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "hasNext": false
+  }
+}
+GET /products/:id
+
+Returns product details along with current stock quantity.
+
+{
+  "id": "uuid",
+  "name": "Product",
+  "sku": "SKU-001",
+  "price": "100.00",
+  "quantity": 0
+}
+
+---
+🔗 Product ↔ Stock Relationship
+
+Every product has a corresponding stock row:
+
+Product created → Stock row auto-created (quantity = 0)
+
+This ensures:
+
+Stock operations always have a valid reference
+No need for conditional stock creation logic
+Simplifies downstream services (orders, stock updates)
+❌ Validation & Error Handling
+
+The system validates inputs before hitting the database.
+
+Examples
+Invalid UUID → 400 INVALID_CATEGORY_ID
+Missing fields → 400 INVALID_INPUT
+Duplicate SKU → 409 SKU_ALREADY_EXISTS
+Standard Error Format
+{
+  "error": "ERROR_CODE",
+  "message": "Human-readable message"
+}
+🧠 Design Decisions
+Soft deletes used instead of hard deletes for data safety
+Transactions used for product + stock creation to avoid inconsistency
+Validation performed before DB queries for better performance
+SKU uniqueness enforced at database level (source of truth)
+---
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.

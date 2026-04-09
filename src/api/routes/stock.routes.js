@@ -3,6 +3,7 @@ const router = express.Router();
 
 const { adjustStock } = require("../../services/stockService");
 const idempotency = require("../middlewares/idempotency");
+const stockModel = require("../../models/stock.model");
 
 // simple UUID regex
 const isUUID = (id) =>
@@ -57,6 +58,24 @@ router.patch("/:productId", idempotency("stock"), async (req, res) => {
       ...(err.available !== undefined && { available: err.available }),
       ...(err.requested !== undefined && { requested: err.requested }),
     });
+  }
+});
+
+router.get("/:productId", async (req, res, next) => {
+  try {
+    const stock = await stockModel.findByProductId(req.params.productId);
+
+    if (!stock) {
+      return res.status(404).json({ error: "STOCK_NOT_FOUND" });
+    }
+
+    res.json({
+      productId: stock.product_id,
+      quantity: stock.quantity,
+      threshold: stock.low_stock_threshold,
+    });
+  } catch (err) {
+    next(err);
   }
 });
 
