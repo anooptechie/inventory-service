@@ -1,17 +1,8 @@
-CREATE TABLE IF NOT EXISTS products (
+CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-  category_id UUID NOT NULL,
-
-  name VARCHAR(255) NOT NULL,
+  name VARCHAR(100) UNIQUE NOT NULL,
   description TEXT,
-
-  sku VARCHAR(100) UNIQUE NOT NULL,
-
-  price NUMERIC(10,2) NOT NULL CHECK (price >= 0),
-
   is_active BOOLEAN NOT NULL DEFAULT true,
-
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
