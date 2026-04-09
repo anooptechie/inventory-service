@@ -664,6 +664,91 @@ Validation performed before DB queries for better performance
 SKU uniqueness enforced at database level (source of truth)
 ---
 
+## 📊 Observability (Milestone 9)
+
+The system implements a structured observability layer to provide visibility into system behavior, performance, and failures.
+
+---
+
+### 🔍 Structured Logging (Pino + Trace ID)
+
+Each request is assigned a unique `traceId` to enable end-to-end tracing.
+
+#### Implementation
+
+* Middleware generates a UUID-based `traceId` per request  
+* `traceId` is attached to:
+  * Request context (`req.log`)
+  * Response headers (`X-Trace-Id`)  
+* Pino is used for structured JSON logging  
+
+#### Example Log
+
+```json
+{
+  "traceId": "b1c2...",
+  "method": "GET",
+  "url": "/products",
+  "status": 200,
+  "duration": 5
+}
+Benefits
+Enables request-level debugging
+Allows correlation of logs across services
+Provides structured, machine-readable logs
+
+📈 Prometheus Metrics
+
+The system exposes metrics for monitoring request volume and performance.
+
+Endpoint
+GET /metrics
+Default Metrics
+
+Provided by prom-client:
+
+CPU usage
+Memory usage
+Event loop lag
+Garbage collection stats
+Custom Metrics
+1. HTTP Request Counter
+http_requests_total{method="GET",route="/products",status="200"} 5
+
+Tracks total number of requests per route.
+
+2. Request Duration Histogram
+http_request_duration_seconds_bucket{...}
+
+Tracks latency distribution of requests.
+
+Guarantees
+Every request is tracked
+Latency is measured in seconds
+Metrics follow Prometheus standards
+🩺 Health Check (Dependency-aware)
+
+The system provides a health endpoint that validates external dependencies.
+
+Endpoint
+GET /health
+Response
+{
+  "status": "ok",
+  "postgres": "connected",
+  "redis": "connected"
+}
+Behavior
+Returns 200 OK when all dependencies are healthy
+Returns 503 Service Unavailable if any dependency fails
+
+🧠 Design Decisions
+Trace ID is propagated via headers instead of response body
+Logging and metrics are implemented as middleware for consistency
+Database errors are not exposed directly — mapped to domain errors
+Metrics include both system-level and application-level insights
+
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.
