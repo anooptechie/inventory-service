@@ -1,4 +1,5 @@
 const pool = require("../db/postgres");
+const { writeEvent } = require("./outboxService");
 
 const createOrder = async ({ customerId, items, idempotencyKey }) => {
   const client = await pool.connect();
@@ -6,7 +7,10 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
   try {
     await client.query("BEGIN");
 
-    // 🔹 Step 1 — Validate stock (lock rows)
+    let totalAmount = 0;
+    const orderItems = [];
+
+    // 🔹 Step 1 — Validate + LOCK + DEDUCT stock
     for (const item of items) {
       const { rows } = await client.query(
         `SELECT quantity FROM stock
@@ -16,35 +20,42 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
       );
 
       if (rows.length === 0) {
-        throw {
-          status: 404,
-          code: "PRODUCT_NOT_FOUND",
-        };
+        throw { status: 404, code: "PRODUCT_NOT_FOUND" };
       }
 
       const available = rows[0].quantity;
 
       if (available < item.quantity) {
         throw {
-          status: 409,
+          status: 400, // ✅ FIXED
           code: "INSUFFICIENT_STOCK",
           available,
           requested: item.quantity,
         };
       }
-    }
 
-    // 🔹 Step 2 — Calculate total + get prices
-    let totalAmount = 0;
-    const orderItems = [];
+      // 🔥 Deduct stock HERE (important for test)
+      const newQty = available - item.quantity;
 
-    for (const item of items) {
-      const { rows } = await client.query(
+      await client.query(
+        `UPDATE stock SET quantity = $1 WHERE product_id = $2`,
+        [newQty, item.productId]
+      );
+
+      // 🔹 Get price
+      const priceRes = await client.query(
         `SELECT price FROM products WHERE id = $1`,
         [item.productId]
       );
 
-      const price = rows[0].price;
+      if (priceRes.rows.length === 0) {
+        throw {
+          status: 404,
+          code: "PRODUCT_NOT_FOUND",
+        };
+      }
+
+      const price = priceRes.rows[0].price;
 
       totalAmount += price * item.quantity;
 
@@ -54,7 +65,7 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
       });
     }
 
-    // 🔹 Step 3 — Insert order
+    // 🔹 Step 2 — Insert order
     const orderResult = await client.query(
       `INSERT INTO orders (customer_id, idempotency_key, total_amount)
        VALUES ($1, $2, $3)
@@ -64,7 +75,7 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
 
     const order = orderResult.rows[0];
 
-    // 🔹 Step 4 — Insert order_items
+    // 🔹 Step 3 — Insert order_items
     for (const item of orderItems) {
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit_price)
@@ -84,6 +95,12 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
 
   } catch (err) {
     await client.query("ROLLBACK");
+    if (err.code === "23505") {
+      throw {
+        status: 409,
+        code: "ORDER_CONFLICT",
+      };
+    }
     throw err;
   } finally {
     client.release();

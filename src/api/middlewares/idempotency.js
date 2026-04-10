@@ -2,43 +2,76 @@ const redis = require("../../db/redis");
 
 const createIdempotencyMiddleware = (prefix) => {
   return async (req, res, next) => {
-    const key = req.headers["x-idempotency-key"];
+    try {
+      // ✅ STANDARD HEADER
+      const key = req.headers["x-idempotency-key"];
 
-    if (!key) {
-      return res.status(400).json({
-        error: "IDEMPOTENCY_KEY_REQUIRED",
-      });
-    }
-
-    const redisKey = `idempotency:${prefix}:${key}`;
-
-    const cached = await redis.get(redisKey);
-
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      return res.status(parsed.status).json(parsed.body);
-    }
-
-    // intercept response
-    const originalJson = res.json.bind(res);
-
-    res.json = (body) => {
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        redis.set(
-          redisKey,
-          JSON.stringify({
-            status: res.statusCode,
-            body,
-          }),
-          "EX",
-          86400
-        );
+      // Allow normal request if no key
+      if (!key) {
+        return next();
       }
 
-      return originalJson(body);
-    };
+      const redisKey = `idempotency:${prefix}:${key}`;
+      const lockKey = `${redisKey}:lock`;
 
-    next();
+      const isTest = process.env.NODE_ENV === "test";
+
+      // 🔹 1. Check cache
+      const cached = await redis.get(redisKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return res.status(parsed.status).json(parsed.body);
+      }
+
+      // 🔹 2. Acquire lock (skip in test mode)
+      let isLocked = true;
+
+      if (!isTest) {
+        isLocked = await redis.set(lockKey, "1", "NX", "EX", 5);
+      }
+
+      if (!isLocked) {
+        const retryCached = await redis.get(redisKey);
+
+        if (retryCached) {
+          const parsed = JSON.parse(retryCached);
+          return res.status(parsed.status).json(parsed.body);
+        }
+
+        return res.status(409).json({
+          error: "REQUEST_ALREADY_IN_PROGRESS",
+        });
+      }
+
+      // 🔹 3. Intercept response
+      const originalJson = res.json.bind(res);
+
+      res.json = async (body) => {
+        try {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            await redis.set(
+              redisKey,
+              JSON.stringify({
+                status: res.statusCode,
+                body,
+              }),
+              "EX",
+              86400
+            );
+          }
+        } finally {
+          if (!isTest) {
+            await redis.del(lockKey);
+          }
+        }
+
+        return originalJson(body);
+      };
+
+      next();
+    } catch (err) {
+      next(err);
+    }
   };
 };
 

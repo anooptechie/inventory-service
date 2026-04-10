@@ -748,6 +748,146 @@ Logging and metrics are implemented as middleware for consistency
 Database errors are not exposed directly — mapped to domain errors
 Metrics include both system-level and application-level insights
 
+---
+
+🧪 Testing Strategy
+
+This project follows a production-grade integration testing approach, focusing on system behavior rather than isolated unit testing.
+
+All tests are written using:
+
+Jest
+Supertest
+📁 Test Coverage Overview
+src/__tests__/
+├── products.test.js
+├── stock.test.js
+├── stock.concurrency.test.js
+├── stock.idempotency.test.js
+├── orders.test.js
+├── orders.idempotency.test.js
+├── confirmOrder.test.js
+├── confirmOrder.outbox.test.js
+├── order.status.test.js
+🔥 Core Testing Philosophy
+
+Tests validate real system guarantees:
+
+Transactions
+Concurrency safety
+Idempotency
+Event consistency (Outbox Pattern)
+Business rule enforcement
+
+🧱 1. Product & Category Tests
+Covered in: products.test.js
+✅ Create product with valid category → 201
+❌ Invalid category → 404 CATEGORY_NOT_FOUND
+❌ Duplicate SKU → 409 SKU_ALREADY_EXISTS
+✅ Pagination response structure verified
+
+⚙️ 2. Stock Management Tests
+Covered in: stock.test.js
+✅ Increase / decrease stock
+❌ Prevent negative stock (INSUFFICIENT_STOCK)
+✅ Stock movement audit records created
+✅ Threshold logic validated
+
+⚡ 3. Concurrency Control (CRITICAL)
+Covered in: stock.concurrency.test.js
+
+Simulates concurrent stock deductions:
+
+Initial stock: 10
+10 concurrent requests × -2
+Guarantees:
+✅ Only 5 succeed
+❌ 5 fail with 409
+✅ Final stock = 0 (never negative)
+
+👉 Uses row-level locking (SELECT FOR UPDATE)
+
+🔁 4. Idempotency Tests
+Covered in:
+stock.idempotency.test.js
+orders.idempotency.test.js
+Guarantees:
+Same X-Idempotency-Key:
+✅ Returns identical response
+❌ Does NOT execute business logic again
+❌ Does NOT hit DB again
+Verified By:
+Redis cache simulation
+Query count assertions
+
+📦 5. Order Creation Tests
+Covered in: orders.test.js
+✅ Create order successfully
+❌ Insufficient stock → 400
+✅ Stock deducted during creation (current design)
+✅ Transaction rollback on failure
+
+🔁 6. Order Idempotency (HIGH VALUE)
+Covered in: orders.idempotency.test.js
+✅ Same request key → same orderId
+❌ No duplicate orders created
+❌ DB not queried on retry
+
+🔒 7. Transaction Safety — Confirm Order
+Covered in: confirmOrder.test.js
+Success Case:
+✅ Order → CONFIRMED
+✅ Stock deducted
+✅ Stock movement recorded
+Failure Case:
+❌ Insufficient stock → 409
+✅ Transaction rollback
+❌ No partial updates
+
+📡 8. Outbox Pattern Validation
+Covered in: confirmOrder.outbox.test.js
+Guarantees:
+✅ Low stock triggers event
+✅ Event written inside transaction
+❌ No event loss on failure
+Verified By:
+Mocking writeEvent
+Ensuring it is called exactly once
+
+🔄 9. Order Status Transition Rules
+Covered in: order.status.test.js
+Transition	Allowed
+PENDING → CONFIRMED	✅
+PENDING → CANCELLED	✅
+CONFIRMED → FULFILLED	✅
+CONFIRMED → CANCELLED	✅
+FULFILLED → any	❌
+CANCELLED → any	❌
+Guarantees:
+❌ Invalid transitions return 400
+✅ Valid transitions succeed
+🧠 Key Engineering Guarantees
+
+This test suite ensures:
+
+✅ Data Consistency
+No negative stock
+No partial writes
+✅ Concurrency Safety
+No overselling under parallel requests
+✅ Idempotent APIs
+Safe retries without duplication
+✅ Transaction Integrity
+Rollback on failure
+✅ Event Reliability
+Outbox ensures delivery consistency
+⚙️ Test Execution
+
+Run all tests:
+
+npm test
+
+---
 
 ## 📎 Note
 

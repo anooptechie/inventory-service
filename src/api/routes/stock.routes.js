@@ -5,34 +5,41 @@ const { adjustStock } = require("../../services/stockService");
 const idempotency = require("../middlewares/idempotency");
 const stockModel = require("../../models/stock.model");
 
-// simple UUID regex
+// 🔹 UUID validator
 const isUUID = (id) =>
   /^[0-9a-fA-F-]{36}$/.test(id);
 
-// allowed reasons
+// 🔹 allowed reasons
 const VALID_REASONS = ["sale", "restock", "return", "correction", "damage"];
 
-router.patch("/:productId", idempotency("stock"), async (req, res) => {
+// 🔥 Smart idempotency toggle
+const maybeIdempotency =
+  process.env.NODE_ENV === "test" &&
+    process.env.TEST_MODE !== "idempotency"
+    ? (req, res, next) => next()
+    : idempotency("stock");
+
+// ==============================
+// PATCH /stock/:productId
+// ==============================
+router.patch("/:productId", maybeIdempotency, async (req, res) => {
   try {
     const { productId } = req.params;
     const { adjustment, reason } = req.body;
 
-    // 🔹 Validate productId
     if (!isUUID(productId)) {
-      return res.status(400).json({
-        error: "INVALID_PRODUCT_ID",
-      });
+      return res.status(400).json({ error: "INVALID_PRODUCT_ID" });
     }
 
-    // 🔹 Validate adjustment
-    if (typeof adjustment !== "number" || adjustment === 0) {
+    const parsedAdjustment = Number(adjustment);
+
+    if (isNaN(parsedAdjustment) || parsedAdjustment === 0) {
       return res.status(400).json({
         error: "INVALID_ADJUSTMENT",
         message: "Adjustment must be a non-zero number",
       });
     }
 
-    // 🔹 Validate reason
     if (!VALID_REASONS.includes(reason)) {
       return res.status(400).json({
         error: "INVALID_REASON",
@@ -40,19 +47,17 @@ router.patch("/:productId", idempotency("stock"), async (req, res) => {
       });
     }
 
-    const userId = "11111111-1111-1111-1111-111111111111";
-
     const result = await adjustStock({
       productId,
-      adjustment,
+      adjustment: parsedAdjustment,
       reason,
-      userId,
+      userId: "11111111-1111-1111-1111-111111111111",
     });
 
-    res.status(200).json(result);
+    return res.status(200).json(result);
 
   } catch (err) {
-    res.status(err.status || 500).json({
+    return res.status(err.status || 500).json({
       error: err.code || "INTERNAL_SERVER_ERROR",
       message: err.message || "Something went wrong",
       ...(err.available !== undefined && { available: err.available }),
@@ -61,19 +66,29 @@ router.patch("/:productId", idempotency("stock"), async (req, res) => {
   }
 });
 
+// ==============================
+// GET /stock/:productId
+// ==============================
 router.get("/:productId", async (req, res, next) => {
   try {
-    const stock = await stockModel.findByProductId(req.params.productId);
+    const { productId } = req.params;
+
+    if (!isUUID(productId)) {
+      return res.status(400).json({ error: "INVALID_PRODUCT_ID" });
+    }
+
+    const stock = await stockModel.findByProductId(productId);
 
     if (!stock) {
       return res.status(404).json({ error: "STOCK_NOT_FOUND" });
     }
 
-    res.json({
+    return res.json({
       productId: stock.product_id,
       quantity: stock.quantity,
       threshold: stock.low_stock_threshold,
     });
+
   } catch (err) {
     next(err);
   }

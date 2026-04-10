@@ -72,6 +72,8 @@ app.use("/categories", categoryRoutes);
 app.use("/products", productRoutes);
 
 // 🔥 8. error handler (always last)
+// 🔥 FIXED ERROR HANDLER ONLY (rest unchanged)
+
 app.use((err, req, res, next) => {
   req.log.error({ err }, "Unhandled error");
 
@@ -96,10 +98,13 @@ app.use((err, req, res, next) => {
     });
   }
 
-  if (err.status && err.message) {
+  // ✅ HANDLE BOTH code + message styles
+  if (err.status && (err.code || err.message)) {
     return res.status(err.status).json({
-      error: err.message,
-      message: err.message,
+      error: err.code || err.message,
+      message: err.message || err.code,
+      ...(err.available !== undefined && { available: err.available }),
+      ...(err.requested !== undefined && { requested: err.requested }),
     });
   }
 
@@ -108,5 +113,4 @@ app.use((err, req, res, next) => {
     message: "Something went wrong",
   });
 });
-
 module.exports = app;
