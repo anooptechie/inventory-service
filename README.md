@@ -889,6 +889,58 @@ npm test
 
 ---
 
+⚙️ Continuous Integration (CI)
+
+This project uses GitHub Actions to automatically run tests on every push and pull request.
+
+🚀 What the CI Pipeline Does
+✅ Runs full test suite using Jest
+✅ Validates all critical backend flows:
+Orders (create, confirm, cancel, fulfil)
+Stock management & concurrency
+Idempotency (Redis-backed)
+Outbox pattern (event consistency)
+✅ Prevents merging broken code into main
+✅ Ensures consistent behavior across environments
+🔄 When It Runs
+
+The CI pipeline is triggered on:
+
+Every push to:
+main
+develop
+Every pull request targeting main
+🧪 Test Environment
+
+The CI pipeline runs in a fully isolated environment:
+
+Database interactions are mocked (no real PostgreSQL required)
+Redis interactions are mocked (no external dependency)
+External services (e.g., notification service) are mocked
+
+👉 This ensures:
+
+⚡ Fast test execution
+🔁 Deterministic results (no flaky tests)
+🔒 No dependency on external systems
+🧱 Pipeline Steps
+
+The CI workflow performs the following steps:
+
+Checkout repository
+Setup Node.js environment
+Install dependencies (npm ci)
+Run test suite (npm test)
+📌 Why This Matters
+
+This CI setup ensures:
+
+🚫 No regressions — failing tests block bad code
+🔍 Continuous validation of system behavior
+🏗️ Production-grade development workflow
+
+---
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.
