@@ -941,6 +941,150 @@ This CI setup ensures:
 
 ---
 
+🔒 Advanced Guarantees & System Reliability
+
+This system goes beyond standard CRUD operations and implements production-grade guarantees to handle real-world edge cases and failure scenarios.
+
+🔁 Idempotency (Redis + DB Fallback)
+Prevents duplicate order creation during retries or network failures
+Uses Redis for fast response caching
+Falls back to PostgreSQL when cache expires
+
+Guarantees:
+Same idempotency key → same response
+No duplicate database writes
+Race-condition safe via UNIQUE constraint
+⚡ Concurrency Control (Row-Level Locking)
+Uses PostgreSQL SELECT ... FOR UPDATE
+Prevents overselling under concurrent requests
+
+Guarantees:
+Stock never goes below zero
+Only valid number of requests succeed
+Safe under parallel load
+
+🧾 Transaction Safety
+All critical operations run inside database transactions
+Guarantees:
+No partial writes
+Automatic rollback on failure
+Strong consistency for stock and orders
+
+📡 Outbox Pattern (Event Reliability)
+Events are written inside the same transaction as business logic
+Ensures no event loss during failures
+Guarantees:
+No dual-write problem
+Reliable event delivery
+Eventual consistency with downstream systems
+
+🧠 Reservation Gap Handling
+
+Stock is validated during order creation but deducted during confirmation.
+
+Edge Case Covered:
+Order A created (stock available)
+Order B confirmed first → consumes stock
+Order A confirm → fails
+Guarantees:
+No overselling across time
+System remains consistent under delayed confirmations
+
+🧾 Audit Logging (Full Traceability)
+
+Every important action is recorded in an audit log:
+
+ORDER_CREATED
+ORDER_CONFIRMED
+ORDER_CANCELLED
+ORDER_FULFILLED
+Guarantees:
+Complete lifecycle tracking
+Debugging and observability
+Production-grade traceability
+
+🧪 Testing Coverage (Enhanced)
+
+The test suite validates real system guarantees, not just functionality.
+
+Key Test Areas
+✅ Order lifecycle (create, confirm, cancel, fulfil)
+✅ Idempotency (Redis + DB fallback)
+✅ Concurrency (parallel stock updates)
+✅ Transaction rollback scenarios
+✅ Outbox event triggering
+✅ Status transition validation
+✅ Reservation gap scenario (real-world edge case)
+✅ Audit log invocation
+
+Testing Approach
+Uses Jest + Supertest
+Mocks external systems (Redis, DB pool, services)
+Focuses on integration-level behavior
+
+---
+
+📊 Observability & Metrics
+
+This system includes domain-level metrics to monitor real-world behavior, not just infrastructure health.
+
+Metrics are exposed via a /metrics endpoint using Prometheus-compatible format.
+
+🎯 Why Metrics Matter
+
+Beyond logs and tests, metrics help answer:
+
+Are users retrying requests?
+Is Redis cache effective?
+Are orders failing due to stock issues?
+Are events being generated reliably?
+
+📈 Implemented Metrics
+🛒 Orders
+orders_created_total
+→ Total number of orders created
+orders_confirmed_total
+→ Total number of successfully confirmed orders
+
+🔁 Idempotency
+idempotency_cache_hits_total
+→ Number of times a request was served from Redis cache
+idempotency_db_fallback_total
+→ Number of times DB fallback was used when cache was missed
+
+⚠️ Failures
+stock_insufficient_total
+→ Number of times an order failed due to insufficient stock
+
+📡 Events
+outbox_events_created_total
+→ Number of events written to the outbox
+
+🧠 Design Principles
+Metrics are recorded only on actual events (no double counting)
+Placed at critical decision points:
+After successful operations
+Before throwing domain errors
+Designed to reflect business behavior, not just technical events
+
+🔍 Example Output
+orders_created_total 15
+orders_confirmed_total 12
+idempotency_cache_hits_total 6
+idempotency_db_fallback_total 2
+stock_insufficient_total 3
+outbox_events_created_total 10
+
+🚀 What This Enables
+
+With these metrics, the system can:
+
+Detect retry patterns (client/network issues)
+Monitor cache effectiveness
+Identify stock bottlenecks
+Track order success rate
+Verify event generation reliability
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.

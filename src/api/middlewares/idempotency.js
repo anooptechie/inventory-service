@@ -1,4 +1,5 @@
 const redis = require("../../db/redis");
+const { idempotencyCacheHits } = require("../../utils/metrics");
 
 const createIdempotencyMiddleware = (prefix) => {
   return async (req, res, next) => {
@@ -19,6 +20,8 @@ const createIdempotencyMiddleware = (prefix) => {
       // 🔹 1. Check cache
       const cached = await redis.get(redisKey);
       if (cached) {
+        idempotencyCacheHits.inc(); 
+
         const parsed = JSON.parse(cached);
         return res.status(parsed.status).json(parsed.body);
       }

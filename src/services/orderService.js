@@ -1,7 +1,36 @@
 const pool = require("../db/postgres");
 const { writeEvent } = require("./outboxService");
+const { writeAuditLog } = require("./auditService"); // 🔥 NEW
+const {
+  ordersCreated,
+  ordersConfirmed,
+  idempotencyDbFallback,
+  stockInsufficient,
+} = require("../utils/metrics");
 
 const createOrder = async ({ customerId, items, idempotencyKey }) => {
+
+  // 🔥 STEP 1 — DB FALLBACK IDEMPOTENCY CHECK
+  if (idempotencyKey) {
+    const existing = await pool.query(
+      "SELECT id, status, total_amount FROM orders WHERE idempotency_key = $1",
+      [idempotencyKey]
+    );
+
+    if (existing.rows.length > 0) {
+      idempotencyDbFallback.inc(); // ✅ METRIC
+
+      const order = existing.rows[0];
+
+      return {
+        orderId: order.id,
+        status: order.status,
+        totalAmount: order.total_amount,
+        isIdempotent: true,
+      };
+    }
+  }
+
   const client = await pool.connect();
 
   try {
@@ -10,7 +39,7 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
     let totalAmount = 0;
     const orderItems = [];
 
-    // 🔹 Step 1 — Validate + LOCK + DEDUCT stock
+    // 🔹 Validate + LOCK + DEDUCT stock
     for (const item of items) {
       const { rows } = await client.query(
         `SELECT quantity FROM stock
@@ -26,15 +55,16 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
       const available = rows[0].quantity;
 
       if (available < item.quantity) {
+        stockInsufficient.inc(); // ✅ METRIC
+
         throw {
-          status: 400, // ✅ FIXED
+          status: 400,
           code: "INSUFFICIENT_STOCK",
           available,
           requested: item.quantity,
         };
       }
 
-      // 🔥 Deduct stock HERE (important for test)
       const newQty = available - item.quantity;
 
       await client.query(
@@ -42,17 +72,13 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
         [newQty, item.productId]
       );
 
-      // 🔹 Get price
       const priceRes = await client.query(
         `SELECT price FROM products WHERE id = $1`,
         [item.productId]
       );
 
       if (priceRes.rows.length === 0) {
-        throw {
-          status: 404,
-          code: "PRODUCT_NOT_FOUND",
-        };
+        throw { status: 404, code: "PRODUCT_NOT_FOUND" };
       }
 
       const price = priceRes.rows[0].price;
@@ -65,17 +91,42 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
       });
     }
 
-    // 🔹 Step 2 — Insert order
-    const orderResult = await client.query(
-      `INSERT INTO orders (customer_id, idempotency_key, total_amount)
-       VALUES ($1, $2, $3)
-       RETURNING id, status`,
-      [customerId, idempotencyKey, totalAmount]
-    );
+    // 🔥 Insert order with race handling
+    let order;
 
-    const order = orderResult.rows[0];
+    try {
+      const orderResult = await client.query(
+        `INSERT INTO orders (customer_id, idempotency_key, total_amount)
+         VALUES ($1, $2, $3)
+         RETURNING id, status`,
+        [customerId, idempotencyKey, totalAmount]
+      );
 
-    // 🔹 Step 3 — Insert order_items
+      order = orderResult.rows[0];
+
+    } catch (err) {
+      if (err.code === "23505") {
+        const existing = await pool.query(
+          "SELECT id, status, total_amount FROM orders WHERE idempotency_key = $1",
+          [idempotencyKey]
+        );
+
+        const existingOrder = existing.rows[0];
+
+        await client.query("ROLLBACK");
+
+        return {
+          orderId: existingOrder.id,
+          status: existingOrder.status,
+          totalAmount: existingOrder.total_amount,
+          isIdempotent: true,
+        };
+      }
+
+      throw err;
+    }
+
+    // 🔹 Insert order_items
     for (const item of orderItems) {
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit_price)
@@ -83,6 +134,16 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
         [order.id, item.productId, item.quantity, item.unit_price]
       );
     }
+
+    // 🔥 AUDIT LOG (CREATE)
+    await writeAuditLog(client, {
+      entityType: "ORDER",
+      entityId: order.id,
+      action: "ORDER_CREATED",
+    });
+
+    // 🔥 METRIC: order created
+    ordersCreated.inc();
 
     await client.query("COMMIT");
 
@@ -95,12 +156,6 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
 
   } catch (err) {
     await client.query("ROLLBACK");
-    if (err.code === "23505") {
-      throw {
-        status: 409,
-        code: "ORDER_CONFLICT",
-      };
-    }
     throw err;
   } finally {
     client.release();
@@ -113,7 +168,6 @@ const confirmOrder = async ({ orderId, userId }) => {
   try {
     await client.query("BEGIN");
 
-    // 🔹 Step 1 — Get order
     const orderRes = await client.query(
       `SELECT * FROM orders WHERE id = $1`,
       [orderId]
@@ -132,7 +186,6 @@ const confirmOrder = async ({ orderId, userId }) => {
       };
     }
 
-    // 🔹 Step 2 — Get order items
     const itemsRes = await client.query(
       `SELECT * FROM order_items WHERE order_id = $1`,
       [orderId]
@@ -140,7 +193,6 @@ const confirmOrder = async ({ orderId, userId }) => {
 
     const items = itemsRes.rows;
 
-    // 🔹 Step 3 — Deduct stock (WITH LOCK)
     for (const item of items) {
       const stockRes = await client.query(
         `SELECT quantity, low_stock_threshold
@@ -153,6 +205,8 @@ const confirmOrder = async ({ orderId, userId }) => {
       const stock = stockRes.rows[0];
 
       if (stock.quantity < item.quantity) {
+        stockInsufficient.inc(); // ✅ METRIC (important)
+
         throw {
           status: 409,
           code: "INSUFFICIENT_STOCK",
@@ -163,7 +217,6 @@ const confirmOrder = async ({ orderId, userId }) => {
 
       const newQty = stock.quantity - item.quantity;
 
-      // update stock
       await client.query(
         `UPDATE stock
          SET quantity = $1, updated_at = NOW()
@@ -171,7 +224,6 @@ const confirmOrder = async ({ orderId, userId }) => {
         [newQty, item.product_id]
       );
 
-      // audit log
       await client.query(
         `INSERT INTO stock_movements
          (product_id, adjustment, quantity_before, quantity_after, reason, performed_by)
@@ -186,7 +238,6 @@ const confirmOrder = async ({ orderId, userId }) => {
         ]
       );
 
-      // 🔥 outbox trigger
       if (
         stock.quantity > stock.low_stock_threshold &&
         newQty <= stock.low_stock_threshold
@@ -199,13 +250,25 @@ const confirmOrder = async ({ orderId, userId }) => {
       }
     }
 
-    // 🔹 Step 4 — Update order status
     await client.query(
       `UPDATE orders
        SET status = 'CONFIRMED'
        WHERE id = $1`,
       [orderId]
     );
+
+    // 🔥 AUDIT LOG (CONFIRM)
+    await writeAuditLog(client, {
+      entityType: "ORDER",
+      entityId: orderId,
+      action: "ORDER_CONFIRMED",
+      metadata: {
+        itemsCount: items.length,
+      },
+    });
+
+    // 🔥 METRIC: order confirmed
+    ordersConfirmed.inc();
 
     await client.query("COMMIT");
 
@@ -253,6 +316,13 @@ const cancelOrder = async ({ orderId }) => {
       [orderId]
     );
 
+    // 🔥 AUDIT LOG (CANCEL)
+    await writeAuditLog(client, {
+      entityType: "ORDER",
+      entityId: orderId,
+      action: "ORDER_CANCELLED",
+    });
+
     await client.query("COMMIT");
 
     return {
@@ -299,6 +369,13 @@ const fulfilOrder = async ({ orderId }) => {
       [orderId]
     );
 
+    // 🔥 AUDIT LOG (FULFIL)
+    await writeAuditLog(client, {
+      entityType: "ORDER",
+      entityId: orderId,
+      action: "ORDER_FULFILLED",
+    });
+
     await client.query("COMMIT");
 
     return {
@@ -313,4 +390,5 @@ const fulfilOrder = async ({ orderId }) => {
     client.release();
   }
 };
+
 module.exports = { createOrder, confirmOrder, cancelOrder, fulfilOrder };

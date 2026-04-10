@@ -24,23 +24,27 @@ describe("Orders API", () => {
             release: jest.fn(),
         });
 
-        // ✅ Redis mocks
+        pool.query = jest.fn();
+
         redis.get.mockResolvedValue(null);
         redis.set.mockResolvedValue("OK");
         redis.del.mockResolvedValue(1);
     });
 
     test("should create order successfully", async () => {
+        // 🔥 DB fallback
+        pool.query.mockResolvedValueOnce({ rows: [] });
+
         mockQuery
             .mockResolvedValueOnce({ rows: [] }) // BEGIN
-            .mockResolvedValueOnce({ rows: [{ quantity: 10 }] }) // SELECT stock
-            .mockResolvedValueOnce({ rows: [] }) // UPDATE stock
-            .mockResolvedValueOnce({ rows: [{ price: 100 }] }) // SELECT price
+            .mockResolvedValueOnce({ rows: [{ quantity: 10 }] })
+            .mockResolvedValueOnce({ rows: [] })
+            .mockResolvedValueOnce({ rows: [{ price: 100 }] })
             .mockResolvedValueOnce({
                 rows: [{ id: "order-1", status: "created" }],
-            }) // INSERT order
-            .mockResolvedValueOnce({ rows: [] }) // INSERT order_items
-            .mockResolvedValueOnce({ rows: [] }); // COMMIT
+            })
+            .mockResolvedValueOnce({ rows: [] })
+            .mockResolvedValueOnce({ rows: [] });
 
         const res = await request(app)
             .post("/orders")
@@ -59,6 +63,9 @@ describe("Orders API", () => {
     });
 
     test("should fail if insufficient stock", async () => {
+        // 🔥 ADD THIS (missing earlier)
+        pool.query.mockResolvedValueOnce({ rows: [] });
+
         mockQuery
             .mockResolvedValueOnce({ rows: [] }) // BEGIN
             .mockResolvedValueOnce({ rows: [{ quantity: 1 }] }) // SELECT
