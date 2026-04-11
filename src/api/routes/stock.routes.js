@@ -5,93 +5,98 @@ const { adjustStock } = require("../../services/stockService");
 const idempotency = require("../middlewares/idempotency");
 const stockModel = require("../../models/stock.model");
 
-// 🔹 UUID validator
+const authenticate = require("../middlewares/authenticate");
+const authorize = require("../middlewares/authorize");
+
 const isUUID = (id) =>
   /^[0-9a-fA-F-]{36}$/.test(id);
 
-// 🔹 allowed reasons
 const VALID_REASONS = ["sale", "restock", "return", "correction", "damage"];
 
-// 🔥 Smart idempotency toggle
 const maybeIdempotency =
   process.env.NODE_ENV === "test" &&
     process.env.TEST_MODE !== "idempotency"
     ? (req, res, next) => next()
     : idempotency("stock");
 
-// ==============================
-// PATCH /stock/:productId
-// ==============================
-router.patch("/:productId", maybeIdempotency, async (req, res) => {
-  try {
-    const { productId } = req.params;
-    const { adjustment, reason } = req.body;
+// 🔹 PATCH stock (admin / manager)
+router.patch(
+  "/:productId",
+  maybeIdempotency,
+  authenticate,
+  authorize("admin", "manager"),
+  async (req, res) => {
+    try {
+      const { productId } = req.params;
+      const { adjustment, reason } = req.body;
 
-    if (!isUUID(productId)) {
-      return res.status(400).json({ error: "INVALID_PRODUCT_ID" });
-    }
+      if (!isUUID(productId)) {
+        return res.status(400).json({ error: "INVALID_PRODUCT_ID" });
+      }
 
-    const parsedAdjustment = Number(adjustment);
+      const parsedAdjustment = Number(adjustment);
 
-    if (isNaN(parsedAdjustment) || parsedAdjustment === 0) {
-      return res.status(400).json({
-        error: "INVALID_ADJUSTMENT",
-        message: "Adjustment must be a non-zero number",
+      if (isNaN(parsedAdjustment) || parsedAdjustment === 0) {
+        return res.status(400).json({
+          error: "INVALID_ADJUSTMENT",
+        });
+      }
+
+      if (!VALID_REASONS.includes(reason)) {
+        return res.status(400).json({
+          error: "INVALID_REASON",
+          allowed: VALID_REASONS,
+        });
+      }
+
+      const result = await adjustStock({
+        productId,
+        adjustment: parsedAdjustment,
+        reason,
+        userId: req.user.userId,
+      });
+
+      return res.status(200).json(result);
+
+    } catch (err) {
+      return res.status(err.status || 500).json({
+        error: err.code || "INTERNAL_SERVER_ERROR",
+        message: err.message || "Something went wrong",
+        ...(err.available !== undefined && { available: err.available }),
+        ...(err.requested !== undefined && { requested: err.requested }),
       });
     }
+  }
+);
 
-    if (!VALID_REASONS.includes(reason)) {
-      return res.status(400).json({
-        error: "INVALID_REASON",
-        allowed: VALID_REASONS,
+// 🔹 GET stock (admin / manager)
+router.get(
+  "/:productId",
+  authenticate,
+  async (req, res, next) => {
+    try {
+      const { productId } = req.params;
+
+      if (!isUUID(productId)) {
+        return res.status(400).json({ error: "INVALID_PRODUCT_ID" });
+      }
+
+      const stock = await stockModel.findByProductId(productId);
+
+      if (!stock) {
+        return res.status(404).json({ error: "STOCK_NOT_FOUND" });
+      }
+
+      return res.json({
+        productId: stock.product_id,
+        quantity: stock.quantity,
+        threshold: stock.low_stock_threshold,
       });
+
+    } catch (err) {
+      next(err);
     }
-
-    const result = await adjustStock({
-      productId,
-      adjustment: parsedAdjustment,
-      reason,
-      userId: "11111111-1111-1111-1111-111111111111",
-    });
-
-    return res.status(200).json(result);
-
-  } catch (err) {
-    return res.status(err.status || 500).json({
-      error: err.code || "INTERNAL_SERVER_ERROR",
-      message: err.message || "Something went wrong",
-      ...(err.available !== undefined && { available: err.available }),
-      ...(err.requested !== undefined && { requested: err.requested }),
-    });
   }
-});
-
-// ==============================
-// GET /stock/:productId
-// ==============================
-router.get("/:productId", async (req, res, next) => {
-  try {
-    const { productId } = req.params;
-
-    if (!isUUID(productId)) {
-      return res.status(400).json({ error: "INVALID_PRODUCT_ID" });
-    }
-
-    const stock = await stockModel.findByProductId(productId);
-
-    if (!stock) {
-      return res.status(404).json({ error: "STOCK_NOT_FOUND" });
-    }
-
-    return res.json({
-      productId: stock.product_id,
-      quantity: stock.quantity,
-      threshold: stock.low_stock_threshold,
-    });
-
-  } catch (err) {
-    next(err);
-  }
-});
+);
 
 module.exports = router;

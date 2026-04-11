@@ -1,3 +1,11 @@
+jest.mock("../api/middlewares/authenticate", () =>
+  require("../__mocks__/authMiddleware").authenticate
+);
+
+jest.mock("../api/middlewares/authorize", () =>
+  require("../__mocks__/authMiddleware").authorize
+);
+
 const request = require("supertest");
 const app = require("../app");
 const pool = require("../db/postgres");

@@ -1085,6 +1085,132 @@ Identify stock bottlenecks
 Track order success rate
 Verify event generation reliability
 
+---
+
+🔐 Authentication & Authorization (RBAC)
+
+This service integrates with a standalone authentication system and enforces role-based access control (RBAC) at the API layer.
+
+🧠 Design Approach
+
+Authentication is handled using JWT-based verification, while authorization is enforced using role-based middleware.
+
+The service does not call the Auth Service at runtime.
+Instead, it verifies tokens locally using a shared secret.
+
+🔑 Authentication (JWT Validation)
+
+Every protected request must include:
+
+Authorization: Bearer <JWT>
+Validation includes:
+JWT signature verification
+Claim validation:
+userId must be a valid UUID
+role must be one of: admin, manager, viewer
+isActive must be true
+Token revocation check using Redis blocklist (jti)
+
+On success:
+
+req.user = {
+  userId,
+  role,
+  isActive
+};
+🛡️ Authorization (RBAC)
+
+Authorization is enforced using a middleware:
+
+authorize("admin", "manager")
+
+Access is granted only if:
+
+req.user.role ∈ allowedRoles
+⚙️ Middleware Order (Critical)
+
+Middleware execution order is carefully designed:
+
+Idempotency → Authenticate → Authorize → Route Handler
+Why this matters:
+Idempotency must run first to prevent duplicate processing
+Authentication ensures request identity
+Authorization enforces access control
+
+📌 Route-Level RBAC Rules
+🛒 Orders
+Endpoint	Access
+POST /orders	Any authenticated user
+POST /orders/:id/confirm	admin, manager
+POST /orders/:id/cancel	Any authenticated user
+POST /orders/:id/fulfil	admin, manager
+
+### 🗂️ Categories
+
+| Endpoint | Access |
+|--------|--------|
+| GET /categories | Any authenticated user |
+| POST /categories | admin only |
+| PATCH /categories/:id | admin only |
+| DELETE /categories/:id | admin only |
+
+📦 Products
+Endpoint	Access
+POST /products	admin, manager
+GET /products	Any authenticated user
+GET /products/:id	Any authenticated user
+
+📊 Stock
+Endpoint	Access
+PATCH /stock/:productId	admin, manager
+GET /stock/:productId	admin, manager
+
+🚫 Token Revocation (Security)
+
+The system supports immediate token invalidation using a Redis-based blocklist:
+
+Each token contains a unique jti
+Revoked tokens are stored in Redis with TTL
+Every request checks if the token is blocked
+🧪 Testing Strategy
+
+Authentication is mocked in tests to isolate business logic:
+
+authenticate middleware is mocked to inject a test user
+authorize middleware is bypassed
+No real JWT generation required
+
+This ensures:
+
+Fast and deterministic tests
+Focus on core system behavior
+Clean separation of concerns
+🧠 Why This Matters
+
+This design demonstrates:
+
+Secure service-to-service authentication
+Stateless authorization using JWT
+Immediate revocation capability
+Clean separation between authentication and business logic
+Production-grade RBAC enforcement
+
+## 🚧 Future Enhancements
+
+- GET /stock/low — list products below threshold.
+  Deferred: system already triggers low_stock events 
+  automatically via the Outbox Pattern when stock drops 
+  below threshold. Manual polling endpoint is supplementary.
+
+- PATCH /stock/:productId/threshold — update threshold per product.
+  Deferred: default threshold is set at product creation.
+  Runtime updates are a low-priority operational feature.
+
+- DELETE /products/:id — soft delete product.
+  Deferred: products can be deactivated via is_active flag.
+  Hard delete introduces referential integrity complexity
+  with existing orders.
+
 ## 📎 Note
 
 This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.
