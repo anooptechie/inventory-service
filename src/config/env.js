@@ -6,8 +6,8 @@ const requiredEnv = [
   "POSTGRES_USER",
   "POSTGRES_PASSWORD",
   "POSTGRES_DB",
-  "REDIS_HOST",
-  "REDIS_PORT",
+  "REDIS_URL",
+  "JWT_SECRET",
 ];
 
 requiredEnv.forEach((key) => {
@@ -24,9 +24,12 @@ module.exports = {
     user: process.env.POSTGRES_USER,
     password: process.env.POSTGRES_PASSWORD,
     database: process.env.POSTGRES_DB,
+    ssl: { rejectUnauthorized: false },  // required for Supabase
   },
   redis: {
-    host: process.env.REDIS_HOST,
-    port: process.env.REDIS_PORT,
+    url: process.env.REDIS_URL,          // changed from host/port
+  },
+  jwt: {
+    secret: process.env.JWT_SECRET,
   },
 };

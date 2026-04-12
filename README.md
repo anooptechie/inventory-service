@@ -1,1216 +1,870 @@
-# Inventory Management System (Backend)
+# Inventory Management System
 
 A production-style backend service for managing products, stock, and orders in an e-commerce system.
 
-This project focuses on solving real-world backend problems such as:
-
-* Concurrency control (preventing overselling)
-* Idempotency (safe retries)
-* Reliable event delivery (Outbox Pattern)
-* Strong data consistency with PostgreSQL transactions
+Built to solve real-world backend engineering problems — not a CRUD tutorial.
 
 ---
 
-## 🚀 Tech Stack
+## Table of Contents
 
-* Node.js + Express
-* PostgreSQL (ACID transactions, row-level locking)
-* Redis (idempotency + caching)
-* Docker (local development)
-
----
-
-## 📦 Current Status
-
-**Phase 0 + Stock Concurrency (Milestone 3) Completed**
-
-* Docker setup (Postgres + Redis)
-* Database & Redis connections established
-* Migration system implemented
-* Health check endpoint (`/health`)
-
-### ✅ Stock Management (Concurrency-Safe)
-
-* Atomic stock updates using PostgreSQL transactions
-* Row-level locking with `SELECT FOR UPDATE`
-* Prevents overselling under concurrent requests
-* Consistent audit trail via `stock_movements` table
-* Validation layer for inputs (UUID, adjustment, reason)
-* Standardized error responses
+- [Project Overview](#project-overview)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Environment Variables](#environment-variables)
+- [How to Run](#how-to-run)
+- [API Reference](#api-reference)
+- [Milestones](#milestones)
+- [Concurrency Control](#concurrency-control)
+- [Idempotency](#idempotency)
+- [Outbox Pattern](#outbox-pattern)
+- [Order Lifecycle](#order-lifecycle)
+- [Authentication & Authorisation](#authentication--authorisation)
+- [Observability](#observability)
+- [Testing](#testing)
+- [CI Pipeline](#ci-pipeline)
+- [Advanced System Guarantees](#advanced-system-guarantees)
+- [Future Enhancements](#future-enhancements)
+- [Trade-offs](#trade-offs)
 
 ---
 
-## 🧪 Running Locally
+## Project Overview
+
+Most inventory systems stop at basic product and stock management. This service goes further:
+
+| Capability                                | Why It Matters                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| Concurrency control via row-level locking | Prevents overselling under concurrent load                          |
+| Idempotency with Redis + DB fallback      | Safe retries — no duplicate orders or stock deductions              |
+| Outbox Pattern for event delivery         | Eliminates the dual-write problem — no silent event loss            |
+| Price snapshot on order items             | Historical order accuracy — price changes never corrupt past orders |
+| Atomic transactions throughout            | No partial writes — all or nothing on every critical operation      |
+| RBAC via Auth Service middleware          | Stateless authorisation — no runtime coupling to Auth Service       |
+| Structured logging with traceId           | Every request traceable across the entire ecosystem                 |
+| Prometheus metrics                        | Business-level visibility — not just infrastructure health          |
+
+---
+
+## Architecture
+
+```
+Client
+  │
+  │  POST /auth/login  ──►  Auth Service  ──►  Issues JWT
+  │
+  │  Any request       ──►  Inventory Service :5000
+  │                              │
+  │                    authenticate middleware  →  verify JWT locally
+  │                    authorize middleware     →  check role
+  │                              │
+  │              ┌───────────────┼───────────────┐
+  │              │               │               │
+  │         Products          Stock           Orders
+  │              │               │               │
+  │              └───────────────┼───────────────┘
+  │                              │
+  │                    outbox_events table
+  │                              │
+  │                    BullMQ outbox worker
+  │                              │
+  │                    Notification Service  ──►  Email + Webhook
+```
+
+**Key principles:**
+
+- Inventory Service never calls Auth Service at runtime — JWT verification is local via shared secret
+- Low stock events are written inside the same DB transaction as the stock update — guaranteed delivery via Outbox Pattern
+- All state-changing endpoints are idempotent — safe to retry from any client
+
+---
+
+## Tech Stack
+
+| Layer               | Technology                       | Reason                                                  |
+| ------------------- | -------------------------------- | ------------------------------------------------------- |
+| Runtime             | Node.js                          | Non-blocking I/O, consistent with portfolio ecosystem   |
+| Framework           | Express.js                       | Minimal, unopinionated, explicit middleware chains      |
+| Primary DB          | PostgreSQL (pg)                  | ACID transactions, row-level locking, CHECK constraints |
+| Cache / Idempotency | Redis (ioredis)                  | O(1) idempotency lookups, native TTL, blocklist checks  |
+| Job Queue           | BullMQ                           | Outbox worker, retry logic, DLQ                         |
+| Auth                | JWT middleware from Auth Service | Shared JWT_SECRET — no runtime Auth Service dependency  |
+| Logging             | Pino                             | Structured JSON, traceId propagation                    |
+| Metrics             | prom-client                      | Prometheus-compatible, business-level metrics           |
+| Testing             | Jest + Supertest                 | Integration tests with mocked dependencies              |
+| CI                  | GitHub Actions                   | Automated runs on every push and PR                     |
+
+---
+
+## Project Structure
+
+```
+inventory-service/
+├── src/
+│   ├── api/
+│   │   ├── routes/
+│   │   │   ├── category.routes.js       # /categories
+│   │   │   ├── product.routes.js        # /products
+│   │   │   ├── stock.routes.js          # /stock
+│   │   │   └── order.routes.js          # /orders
+│   │   └── middlewares/
+│   │       ├── authenticate.js          # JWT verify + claims validation + blocklist check
+│   │       ├── authorize.js             # Role check factory — authorize("admin","manager")
+│   │       └── idempotency.js           # X-Idempotency-Key — Redis cache + DB fallback
+│   ├── services/
+│   │   ├── productService.js            # Product business logic
+│   │   ├── stockService.js              # Stock updates with SELECT FOR UPDATE
+│   │   ├── orderService.js              # Order lifecycle management
+│   │   └── outboxService.js             # Writes events inside existing transactions
+│   ├── workers/
+│   │   └── outboxWorker.js              # BullMQ worker — polls and delivers outbox events
+│   ├── models/
+│   │   ├── category.model.js            # categories table queries
+│   │   ├── product.model.js             # products table queries
+│   │   ├── stock.model.js               # stock table queries
+│   │   ├── order.model.js               # orders table queries
+│   │   ├── orderItem.model.js           # order_items table queries
+│   │   ├── stockMovement.model.js       # stock_movements append-only table
+│   │   └── outboxEvent.model.js         # outbox_events table queries
+│   ├── db/
+│   │   ├── postgres.js                  # pg Pool connection
+│   │   ├── redis.js                     # ioredis client
+│   │   ├── migrate.js                   # runs migrations in order
+│   │   └── migrations/
+│   │       ├── 001_create_categories.sql
+│   │       ├── 002_create_products.sql
+│   │       ├── 003_create_stock.sql
+│   │       ├── 004_create_orders.sql
+│   │       ├── 005_create_order_items.sql
+│   │       ├── 006_create_stock_movements.sql
+│   │       ├── 007_create_outbox_events.sql
+│   │       └── 008_create_indexes.sql
+│   ├── config/
+│   │   └── env.js                       # validates all env vars on startup
+│   ├── utils/
+│   │   ├── logger.js                    # Pino logger instance
+│   │   ├── traceId.js                   # assigns traceId UUID to every request
+│   │   └── paginate.js                  # consistent pagination envelope builder
+│   └── app.js                           # Express app setup
+├── src/__tests__/
+│   ├── setup.js                         # global mocks — pg, Redis, axios
+│   ├── products.test.js                 # product + category CRUD, soft delete, pagination
+│   ├── stock.test.js                    # adjustments, movements, threshold logic
+│   ├── stock.concurrency.test.js        # concurrent updates — the most critical test
+│   ├── stock.idempotency.test.js        # cache hit, no side effects on retry
+│   ├── orders.test.js                   # create, cancel, confirm, fulfil, status transitions
+│   ├── orders.idempotency.test.js       # same key = same orderId, one DB row
+│   ├── confirmOrder.test.js             # transaction safety, stock deduction
+│   ├── confirmOrder.outbox.test.js      # outbox event written inside transaction
+│   └── order.status.test.js             # status transition validation
+├── server.js                            # entry point
+├── .env.example
+└── package.json
+```
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` before running.
+
+```env
+PORT=5000
+NODE_ENV=development
+
+# PostgreSQL (Supabase)
+POSTGRES_HOST=db.xxxx.supabase.co
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your-password
+POSTGRES_DB=postgres
+
+# Redis (Upstash)
+REDIS_URL=redis://default:password@endpoint.upstash.io:6379
+
+# JWT — must match Auth Service
+JWT_SECRET=same-value-as-auth-service
+
+# Notification Service
+NOTIFICATION_SERVICE_URL=http://localhost:4000
+
+# Outbox Worker
+OUTBOX_POLL_INTERVAL_MS=5000
+OUTBOX_MAX_ATTEMPTS=5
+```
+
+---
+
+## How to Run
+
+**1. Install dependencies**
 
 ```bash
-docker compose up -d
 npm install
-npm run dev
 ```
 
-Health check:
+**2. Run database migrations**
 
+```bash
+node src/db/migrate.js
 ```
-GET http://localhost:5000/health
+
+**3. Start the server**
+
+```bash
+node server.js
+```
+
+**4. Start the outbox worker** (separate terminal)
+
+```bash
+node src/workers/outboxWorker.js
+```
+
+Server runs on `http://localhost:5000`
+
+**Health check:**
+
+```bash
+curl http://localhost:5000/health
 ```
 
 ---
 
-## 🧠 Project Focus
+## API Reference
 
-This is not a CRUD project.
+### Category Endpoints
 
-The system is designed to handle:
+| Method | Path              | Auth              | Description                                  |
+| ------ | ----------------- | ----------------- | -------------------------------------------- |
+| GET    | `/categories`     | Any authenticated | List all active categories. Paginated.       |
+| POST   | `/categories`     | admin only        | Create category. Name must be unique.        |
+| PATCH  | `/categories/:id` | admin only        | Update name or description.                  |
+| DELETE | `/categories/:id` | admin only        | Soft-delete. Fails if active products exist. |
 
-* Concurrent stock updates safely
-* Retry-safe operations using idempotency keys
-* Guaranteed event delivery using the Outbox Pattern
+### Product Endpoints
+
+| Method | Path            | Auth              | Description                                                                  |
+| ------ | --------------- | ----------------- | ---------------------------------------------------------------------------- |
+| GET    | `/products`     | Any authenticated | List active products. Supports `?category=&search=&page=&limit=`. Paginated. |
+| GET    | `/products/:id` | Any authenticated | Single product with current stock quantity.                                  |
+| POST   | `/products`     | admin, manager    | Create product. Auto-creates stock row at quantity 0.                        |
+| PATCH  | `/products/:id` | admin, manager    | Update product details.                                                      |
+
+### Stock Endpoints
+
+| Method | Path                | Auth              | Description                                                           |
+| ------ | ------------------- | ----------------- | --------------------------------------------------------------------- |
+| GET    | `/stock/:productId` | Any authenticated | Current stock level and threshold.                                    |
+| PATCH  | `/stock/:productId` | admin, manager    | Adjust stock. Requires `X-Idempotency-Key`. Uses `SELECT FOR UPDATE`. |
+
+### Order Endpoints
+
+| Method | Path                  | Auth                    | Description                                                                   |
+| ------ | --------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| POST   | `/orders`             | Any authenticated       | Create order. Validates stock. Requires `X-Idempotency-Key`. Status: PENDING. |
+| GET    | `/orders/:id`         | Owner or admin, manager | Order details with line items.                                                |
+| GET    | `/orders`             | admin, manager          | All orders. Supports `?status=&page=`. Paginated.                             |
+| POST   | `/orders/:id/confirm` | admin, manager          | Confirm order. Deducts stock atomically. Triggers low stock check.            |
+| POST   | `/orders/:id/cancel`  | Owner or admin, manager | Cancel order. Status validation enforced.                                     |
+| POST   | `/orders/:id/fulfil`  | admin, manager          | Mark order fulfilled. Terminal state.                                         |
+
+### Observability Endpoints
+
+| Method | Path       | Description                                        |
+| ------ | ---------- | -------------------------------------------------- |
+| GET    | `/health`  | Dependency-aware health check. Returns 200 or 503. |
+| GET    | `/metrics` | Prometheus metrics.                                |
 
 ---
 
-## ⚙️ Stock Concurrency Design
+## Milestones
 
-The system ensures safe stock updates under concurrent requests using database-level guarantees.
+### Milestone 1 — Infrastructure ✅
+
+- PostgreSQL connection via pg Pool
+- Redis connection via ioredis
+- Migration system — runs 8 `.sql` files in order
+- Environment configuration with startup validation
+- Health check with active Postgres + Redis dependency verification
+- Returns 503 on degraded state — load balancer compatible
+
+### Milestone 2 — Categories + Products ✅
+
+- Full CRUD for categories and products
+- Soft delete on both — `is_active` flag, not hard delete
+- SKU uniqueness enforced at DB level
+- Product creation auto-creates a stock row at quantity 0 — atomic transaction
+- Pagination envelope on all list endpoints: `{ data, meta: { page, limit, total, hasNext } }`
+- Search and category filtering on GET /products
+- GET /products/:id includes current stock quantity
+
+### Milestone 3 — Stock Management + Concurrency ✅
+
+- `PATCH /stock/:productId` uses `SELECT FOR UPDATE` inside a PostgreSQL transaction
+- Concurrent requests are serialised at the database level — no race conditions
+- Stock never goes negative — enforced in application and by DB `CHECK (quantity >= 0)`
+- Every successful adjustment writes a `stock_movements` record in the same transaction
+- 409 `INSUFFICIENT_STOCK` with `available` and `requested` fields on failure
+- `client.release()` in `finally` block — pool exhaustion prevention
+
+### Milestone 4 — Idempotency ✅
+
+- `X-Idempotency-Key` header required on `PATCH /stock` and `POST /orders`
+- Redis cache — scoped key: `idempotency:<resource>:<key>` — 24-hour TTL
+- DB fallback — `idempotency_key` column on orders table — durable when Redis cache expires
+- Error responses (4xx/5xx) are not cached — clients can retry after fixing their request
+- 400 `IDEMPOTENCY_KEY_REQUIRED` when header is missing
+
+### Milestone 5 — Outbox Pattern ✅
+
+- Low stock events written to `outbox_events` table inside the same DB transaction as the stock update
+- Eliminates the dual-write problem — stock update and event are atomic
+- BullMQ outbox worker polls `PENDING` events every 5 seconds
+- Delivers to Notification Service via HTTP POST
+- Failed deliveries: attempts incremented, retried with exponential backoff
+- After max attempts: status set to `FAILED` for manual inspection
+- Threshold crossing logic — events fire only when stock crosses below threshold, not repeatedly
+
+### Milestone 6 — Orders: Create + Cancel ✅
+
+- `POST /orders` validates stock availability using `SELECT FOR UPDATE`
+- Price snapshot — `unit_price` copied from product at order creation time
+- Historical accuracy — future price changes do not affect past orders
+- Idempotency enforced — same key returns same orderId, no duplicate DB rows
+- `POST /orders/:id/cancel` validates status transitions
+- Status must be `PENDING` or `CONFIRMED` to cancel — `FULFILLED` orders cannot be cancelled
+
+### Milestone 7 — Orders: Confirm + Fulfil ✅
+
+- `POST /orders/:id/confirm` deducts stock atomically inside a transaction
+- Locks stock rows with `SELECT FOR UPDATE` — safe under concurrency
+- Writes `stock_movements` records with `reason=sale` and `reference_id=orderId`
+- Writes outbox event inside the same transaction if stock drops below threshold
+- `POST /orders/:id/fulfil` marks terminal state — no further transitions allowed
+- Full audit logging on every status transition
+
+### Milestone 8 — Auth Integration ✅
+
+- `authenticate.js` and `authorize.js` middleware from Auth Service
+- JWT verified locally using shared `JWT_SECRET` — no runtime Auth Service call
+- Claims validation: `userId` UUID format, `role` whitelist, `isActive` check
+- Redis blocklist check via `jti` — revoked tokens rejected immediately
+- RBAC applied at routing layer — not inside controllers
+- Middleware order: `Idempotency → Authenticate → Authorize → Handler`
+
+### Milestone 9 — Observability ✅
+
+- Structured JSON logging via Pino
+- `traceId` UUID assigned per request — propagated to all log lines and response headers
+- `X-Trace-Id` header on every response — enables cross-service request tracing
+- Prometheus metrics on `/metrics` — both system-level and business-level
+- Health check actively verifies Postgres and Redis — returns 503 on degraded state
+
+### Milestone 10 — Tests + CI ✅
+
+- 9 test files using Jest + Supertest
+- Integration-style tests — test HTTP behaviour, not internal functions
+- All external dependencies mocked — no real DB or Redis required in CI
+- `stock.concurrency.test.js` proves row-level locking prevents overselling
+- `orders.idempotency.test.js` proves same key produces one order, not duplicates
+- GitHub Actions CI runs on every push and pull request
+
+---
+
+## Concurrency Control
+
+The core system design challenge: two customers buy the last unit simultaneously. Without protection, both succeed and stock goes negative.
 
 ### Approach
 
-* Uses `SELECT FOR UPDATE` to acquire row-level locks
-* All operations executed inside a single transaction
-* Concurrent requests are serialized at the database level
+```
+PATCH /stock/:productId  { adjustment: -2, reason: "sale" }
 
-### Guarantees
+  BEGIN TRANSACTION
+    SELECT quantity, low_stock_threshold
+    FROM stock
+    WHERE product_id = $1
+    FOR UPDATE                    ← row-level lock acquired
+                                  ← all concurrent requests block here
 
-* No race conditions
-* No lost updates
-* Stock never goes negative
-* All successful operations are recorded in `stock_movements`
+    if quantity + adjustment < 0:
+      ROLLBACK
+      return 409 INSUFFICIENT_STOCK
 
-### Example Scenario
+    UPDATE stock SET quantity = quantity + adjustment
 
-Initial stock: `10`
-10 concurrent requests each deducting `2`
+    INSERT INTO stock_movements (before, after, reason, ...)
+
+    if new_quantity <= threshold:
+      INSERT INTO outbox_events   ← same transaction
+
+  COMMIT
+```
+
+### Proof — Concurrency Test
+
+```
+Initial stock: 10
+10 concurrent requests × -2 each (total requested: 20)
 
 Result:
+  5 requests succeed  →  stock deducted from 10 to 0
+  5 requests fail     →  409 INSUFFICIENT_STOCK
+  Final stock: 0      →  never negative
+```
 
-* 5 requests succeed (total deduction = 10)
-* 5 requests fail with `409 INSUFFICIENT_STOCK`
-* Final stock = `0`
+### Why SELECT FOR UPDATE
 
-This ensures correctness even under high concurrency.
+Pessimistic locking — correct for inventory where stock contention is expected. The first request acquires the lock. All others wait. This serialises updates without race conditions.
+
+**Known trade-off:** Under extreme concurrency (flash sales), many requests queue behind the DB lock. Upgrade path: optimistic concurrency with a `version` column, or Redis pre-decrement strategy to reduce DB lock contention.
 
 ---
 
-## 🔌 Sample API — Adjust Stock
+## Idempotency
 
-**PATCH /stock/:productId**
-
-```json
-{
-  "adjustment": -2,
-  "reason": "sale"
-}
-```
-
-### Success Response
-
-```json
-{
-  "productId": "uuid",
-  "quantity": 8,
-  "threshold": 5
-}
-```
-
-### Error Response
-
-```json
-{
-  "error": "INSUFFICIENT_STOCK",
-  "message": "Not enough stock",
-  "available": 0,
-  "requested": 2
-}
-```
-
----
-
-## 🔁 Idempotency (Retry-Safe Operations)
-
-The system ensures that repeated requests (due to retries, network failures, or duplicate submissions) do not cause unintended side effects.
+Network failures cause clients to retry. Without idempotency, a retry creates a duplicate order or deducts stock twice.
 
 ### Approach
 
-* Clients must send an `X-Idempotency-Key` header with each request
-* Requests are cached in Redis using a scoped key (`idempotency:<resource>:<key>`)
-* If the same key is received again:
-  * The cached response is returned
-  * The underlying business logic is NOT executed again
+```
+POST /orders
+X-Idempotency-Key: "client-uuid-abc"
 
-### Guarantees
+1. Check Redis: GET idempotency:orders:client-uuid-abc
+   → if found: return cached response immediately
 
-* No duplicate stock deductions
-* Safe retries for network failures
-* Deterministic responses for repeated requests
+2. Check orders table: SELECT WHERE idempotency_key = "client-uuid-abc"
+   → if found: return existing order (durable DB fallback)
 
-### Behavior
+3. Execute business logic
 
-| Scenario | Result |
-|--------|--------|
-| Same key + same request | Cached response returned |
-| Different key | New execution |
-| Missing key | `400 IDEMPOTENCY_KEY_REQUIRED` |
-| Failed request (4xx/5xx) | Not cached (can be retried safely) |
+4. Cache response in Redis (24h TTL)
+   Store idempotency_key on orders row (permanent)
 
-### Example
+5. Return response
+```
 
-#### Request
+### Behaviour
 
-```http
-PATCH /stock/:productId
-X-Idempotency-Key: test-123
-{
-  "adjustment": -2,
-  "reason": "sale"
-}
-First Call
-{
-  "productId": "uuid",
-  "quantity": 8,
-  "threshold": 5
-}
-Retry (same key)
-{
-  "productId": "uuid",
-  "quantity": 8,
-  "threshold": 5
-}
-
-👉 No additional stock deduction occurs.
+| Scenario                 | Result                                     |
+| ------------------------ | ------------------------------------------ |
+| First request            | Business logic executes. Response cached.  |
+| Same key — retry         | Cached response returned. No side effects. |
+| Same key — Redis expired | DB fallback returns existing order.        |
+| Missing key              | 400 `IDEMPOTENCY_KEY_REQUIRED`             |
+| Failed request (4xx)     | Not cached — retry executes again          |
 
 ---
 
-## 📤 Outbox Pattern (Reliable Event Delivery)
+## Outbox Pattern
 
-The system ensures that events are reliably delivered even in the presence of failures, crashes, or network issues.
+### The Problem
 
-### Problem
+```
+Stock updated in DB  ✅
+Service crashes      💥
+Event never sent     ❌  ←  silent inconsistency
+```
 
-Directly sending events after database updates can lead to inconsistencies:
+This is the dual-write problem. Direct HTTP after commit has a crash window.
 
-* Stock updated in DB ✅  
-* Event fails to send ❌  
-* System becomes inconsistent
+### The Solution
 
-This is known as the **dual-write problem**.
+```
+BEGIN TRANSACTION
+  UPDATE stock                    ← business operation
+  INSERT INTO stock_movements     ← audit record
+  INSERT INTO outbox_events       ← event record
+COMMIT                            ← all three or none
 
----
+BullMQ worker polls outbox_events WHERE status = PENDING
+  → POST /events to Notification Service
+  → On success: UPDATE status = DELIVERED
+  → On failure: increment attempts, retry with backoff
+  → After max attempts: status = FAILED (DLQ for inspection)
+```
 
-### Approach
+**Guarantee:** If the stock update committed, the event will be delivered. The crash window is eliminated.
 
-* Events are written to an `outbox_events` table **within the same database transaction**
-* A background worker continuously polls pending events
-* Events are delivered asynchronously and marked as `DELIVERED`
+### Event Schema
 
----
-
-### Flow
-
-1. Begin transaction  
-2. Update stock  
-3. Insert audit log (`stock_movements`)  
-4. Insert event into `outbox_events`  
-5. Commit transaction  
-
-Worker:
-
-1. Fetch `PENDING` events  
-2. Deliver event (simulated / external service)  
-3. Mark as `DELIVERED`  
-
----
-
-### Guarantees
-
-* No event loss after successful DB commit  
-* Safe handling of service crashes  
-* Events are retried until successfully delivered  
-* Eliminates dual-write inconsistency  
-
----
-
-### Example Scenario
-
-Stock drops below threshold:
-
-```text
-Stock: 6 → 4 (threshold = 5)
-
-Result:
-
-Stock updated in DB
-inventory.low_stock event inserted into outbox
-Worker processes event asynchronously
-Event marked as DELIVERED
-Event Schema
+```json
 {
   "type": "inventory.low_stock",
+  "channels": ["email", "webhook"],
   "payload": {
     "productId": "uuid",
+    "productName": "Widget A",
+    "sku": "WGT-001",
     "quantity": 4,
     "threshold": 5
-  },
-  "status": "PENDING"
-}
-
----
-
-## 🛒 Orders — Creation (PENDING State)
-
-The system supports creating customer orders with strong guarantees around consistency, validation, and idempotency.
-
-### Approach
-
-* Orders are created with status `PENDING`
-* Stock is **validated but NOT deducted** during creation
-* Product prices are fetched and stored as a snapshot (`unit_price`)
-* All operations are executed inside a single database transaction
-* Idempotency is enforced using `X-Idempotency-Key`
-
----
-
-### Flow
-
-1. Idempotency middleware checks for duplicate request  
-2. Begin transaction  
-3. Lock stock rows using `SELECT FOR UPDATE`  
-4. Validate stock availability for each item  
-5. Fetch product prices  
-6. Insert into `orders` table  
-7. Insert into `order_items` table  
-8. Commit transaction  
-
----
-
-### Guarantees
-
-* No partial orders (atomic transaction)  
-* No duplicate orders (idempotency)  
-* No overselling during validation  
-* Price consistency via snapshot (historical accuracy)  
-
----
-
-### Important Design Decision
-
-Stock is **not deducted during order creation**.
-
-```text
-POST /orders → validate only
-POST /orders/:id/confirm → deduct stock
-
-This avoids premature stock reservation and keeps the system simpler for the current scope.
-
-Example
-Request
-POST /orders
-X-Idempotency-Key: order-123
-{
-  "items": [
-    {
-      "productId": "uuid",
-      "quantity": 2
-    }
-  ]
-}
-Response
-{
-  "orderId": "uuid",
-  "status": "PENDING",
-  "totalAmount": 200,
-  "items": [
-    {
-      "productId": "uuid",
-      "quantity": 2,
-      "unit_price": 100
-    }
-  ]
-}
----
-
-## ✅ Orders — Confirmation (CONFIRMED)
-
-Order confirmation is the **core business operation** where stock is actually deducted and the system transitions an order from `PENDING` → `CONFIRMED`.
-
----
-
-### Approach
-
-* Executed inside a single database transaction
-* Locks stock rows using `SELECT FOR UPDATE`
-* Deducts stock safely under concurrency
-* Records audit logs in `stock_movements`
-* Triggers outbox events when stock falls below threshold
-* Updates order status → `CONFIRMED`
-
----
-
-### Flow
-
-1. Fetch order and validate state (`PENDING` only)
-2. Fetch order items
-3. Lock stock rows (`SELECT FOR UPDATE`)
-4. Validate stock availability
-5. Deduct stock
-6. Insert audit log (`stock_movements`)
-7. Insert outbox event (if low stock threshold reached)
-8. Update order status to `CONFIRMED`
-9. Commit transaction
-
----
-
-### Guarantees
-
-* No overselling during confirmation
-* No partial updates (atomic transaction)
-* Full audit trail for stock changes
-* Reliable event delivery via Outbox Pattern
-* Prevents invalid state transitions (only `PENDING` → `CONFIRMED`)
-
----
-
-### Example
-
-#### Request
-
-```http
-POST /orders/:id/confirm
-```
-
----
-
-#### Response
-
-```json
-{
-  "orderId": "uuid",
-  "status": "CONFIRMED"
-}
-```
----
-
-I need README Info on implementation of ORDER Cancel and ORDER FULLFILLED!
-
-Perfect — here are clean, professional README sections for both Cancel and Fulfil 👇
-(Just paste them under your Orders section)
-
-❌ Orders — Cancellation (CANCELLED)
-
-Orders can be cancelled only before confirmation, ensuring no impact on stock or system consistency.
-
-Approach
-Cancellation is allowed only when order status is PENDING
-Executed inside a database transaction
-Updates order status → CANCELLED
-No stock updates or audit logs required
-
-Flow
-Fetch order by ID
-Validate existence
-Check status is PENDING
-Update order status → CANCELLED
-Commit transaction
-
-Guarantees
-Prevents cancellation after stock deduction
-No side effects on inventory
-Ensures valid state transitions only
-No partial updates (transactional safety)
-
-Example
-Request
-POST /orders/:id/cancel
-
-Response
-{
-  "orderId": "uuid",
-  "status": "CANCELLED"
-}
-
----
-
-📦 Orders — Fulfilment (FULFILLED)
-
-Order fulfilment represents the final stage of the order lifecycle after successful confirmation.
-
-Approach
-Fulfilment is allowed only when order status is CONFIRMED
-Executed inside a database transaction
-Updates order status → FULFILLED
-No stock changes (already deducted during confirmation)
-
-Flow
-Fetch order by ID
-Validate existence
-Check status is CONFIRMED
-Update order status → FULFILLED
-Commit transaction
-
-Guarantees
-Prevents fulfilment of unconfirmed orders
-Maintains correct order lifecycle transitions
-No duplicate or invalid state changes
-Transactional integrity
-
-Example
-Request
-POST /orders/:id/fulfil
-
-Response
-{
-  "orderId": "uuid",
-  "status": "FULFILLED"
-}
-
----
-
----
-
-## 🛡️ Data Integrity & Performance Optimizations
-
-The system incorporates database-level constraints and indexing to ensure consistency and scalability.
-
-### Foreign Key Constraints
-
-* Enforced relationships between tables:
-  * `order_items.order_id → orders.id`
-  * `order_items.product_id → products.id`
-* Prevents invalid or orphaned records
-* Ensures referential integrity at the database level
-
----
-
-### Indexing Strategy
-
-Indexes are added to optimize frequently accessed queries:
-
-* `stock(product_id)` → fast stock lookup
-* `orders(status)` → efficient filtering by lifecycle state
-* `outbox_events(status)` → optimized worker polling
-* `orders(idempotency_key)` → faster idempotency checks
-
----
-
-### Idempotent Migrations
-
-* All migrations are designed to be safe for repeated execution
-* Uses conditional checks (`IF NOT EXISTS`) to avoid duplication errors
-* Ensures compatibility with CI/CD pipelines and multiple environments
-
----
-
-### Event Optimization (Threshold Crossing)
-
-Low-stock events are triggered only when stock crosses the threshold:
-
-```text
-Before: Triggered repeatedly below threshold ❌
-After: Triggered only on crossing (e.g., 8 → 4) ✅
-
-This prevents event flooding and ensures meaningful notifications
-
-# ✅ 2. UPDATE — Order Confirmation (Enhance it)
-
-👉 Add THIS inside your **Order Confirm section → Guarantees**
-
-```md
-* Prevents duplicate low-stock events via threshold crossing logic  
-* Ensures referential integrity through foreign key constraints  
-* Optimized query performance using database indexes 
-
----
-
-## 📊 Error Handling & Observability
-
-The API implements consistent error handling and logging for easier debugging and reliability.
-
-### Standard Error Format
-
-All endpoints return structured error responses:
-
-```json
-{
-  "error": "ERROR_CODE",
-  "message": "Human-readable message"
-}
-
----
-
-## 📦 Categories & Products (Milestone 2)
-
-The system provides a complete domain layer for managing categories and products, forming the foundation for stock and order operations.
-
----
-
-### 🗂️ Categories — CRUD (Soft Delete)
-
-Categories represent logical groupings of products.
-
-#### Features
-
-* Create categories with name and optional description  
-* Fetch categories with pagination  
-* Update category details  
-* Soft delete using `is_active = false`  
-
-#### Guarantees
-
-* No hard deletes (data is preserved for integrity and auditability)  
-* Only active categories are returned in queries  
-* Consistent pagination response format  
-
----
-
-### 📦 Products — Creation (Transactional)
-
-Products are created with strong guarantees ensuring consistency with stock.
-
-#### Approach
-
-* Product creation is executed inside a database transaction  
-* Each product is linked to a valid category  
-* A corresponding stock row is automatically created  
-
-#### Flow
-
-1. Validate input (name, SKU, price, categoryId)  
-2. Validate category existence  
-3. Begin transaction  
-4. Insert product into `products` table  
-5. Insert stock row into `stock` table (quantity = 0, default threshold)  
-6. Commit transaction  
-
-#### Guarantees
-
-* Product and stock are always created together (no partial state)  
-* Referential integrity enforced via category validation  
-* SKU uniqueness enforced at database level  
-* Prevents orphaned products without stock  
-
----
-
-### 🔍 Products — Read APIs
-
-#### GET /products
-
-Supports:
-
-* Pagination (`page`, `limit`)  
-* Search (`name ILIKE`)  
-* Category filtering  
-
-#### Response Format
-
-```json
-{
-  "data": [...],
-  "meta": {
-    "page": 1,
-    "limit": 10,
-    "total": 1,
-    "hasNext": false
   }
 }
-GET /products/:id
-
-Returns product details along with current stock quantity.
-
-{
-  "id": "uuid",
-  "name": "Product",
-  "sku": "SKU-001",
-  "price": "100.00",
-  "quantity": 0
-}
-
----
-🔗 Product ↔ Stock Relationship
-
-Every product has a corresponding stock row:
-
-Product created → Stock row auto-created (quantity = 0)
-
-This ensures:
-
-Stock operations always have a valid reference
-No need for conditional stock creation logic
-Simplifies downstream services (orders, stock updates)
-❌ Validation & Error Handling
-
-The system validates inputs before hitting the database.
-
-Examples
-Invalid UUID → 400 INVALID_CATEGORY_ID
-Missing fields → 400 INVALID_INPUT
-Duplicate SKU → 409 SKU_ALREADY_EXISTS
-Standard Error Format
-{
-  "error": "ERROR_CODE",
-  "message": "Human-readable message"
-}
-🧠 Design Decisions
-Soft deletes used instead of hard deletes for data safety
-Transactions used for product + stock creation to avoid inconsistency
-Validation performed before DB queries for better performance
-SKU uniqueness enforced at database level (source of truth)
----
-
-## 📊 Observability (Milestone 9)
-
-The system implements a structured observability layer to provide visibility into system behavior, performance, and failures.
+```
 
 ---
 
-### 🔍 Structured Logging (Pino + Trace ID)
+## Order Lifecycle
 
-Each request is assigned a unique `traceId` to enable end-to-end tracing.
+```
+POST /orders              →  PENDING
+                             Stock validated (not deducted)
+                             Price snapshot taken
+                             Idempotency key stored
 
-#### Implementation
+POST /orders/:id/confirm  →  CONFIRMED
+                             Stock deducted atomically
+                             stock_movements written
+                             Outbox event written if low stock
+                             Audit: ORDER_CONFIRMED
 
-* Middleware generates a UUID-based `traceId` per request  
-* `traceId` is attached to:
-  * Request context (`req.log`)
-  * Response headers (`X-Trace-Id`)  
-* Pino is used for structured JSON logging  
+POST /orders/:id/cancel   →  CANCELLED
+                             Allowed from PENDING or CONFIRMED
+                             Audit: ORDER_CANCELLED
 
-#### Example Log
+POST /orders/:id/fulfil   →  FULFILLED
+                             Allowed from CONFIRMED only
+                             Terminal state — no further transitions
+                             Audit: ORDER_FULFILLED
+```
+
+### Status Transition Rules
+
+| From      | To        | Allowed     |
+| --------- | --------- | ----------- |
+| PENDING   | CONFIRMED | ✅          |
+| PENDING   | CANCELLED | ✅          |
+| CONFIRMED | FULFILLED | ✅          |
+| CONFIRMED | CANCELLED | ✅          |
+| FULFILLED | any       | ❌ Terminal |
+| CANCELLED | any       | ❌ Terminal |
+
+### Known Limitation — Reservation Gap
+
+Stock is validated at order creation but only deducted at confirmation. This creates a window:
+
+```
+Order A created  →  stock available (10 units)
+Order B confirmed →  consumes 10 units
+Order A confirm   →  fails (0 units left)
+```
+
+The system handles this gracefully — Order A gets a clear 409 `INSUFFICIENT_STOCK` on confirm. No overselling occurs. The documented upgrade path is a `reserved_quantity` column that holds stock at creation time.
+
+---
+
+## Authentication & Authorisation
+
+This service integrates with the standalone Auth Service and enforces RBAC at the routing layer.
+
+### Design
+
+- Auth Service is **never called at runtime** — JWT verification is local
+- Shared `JWT_SECRET` between Auth Service and Inventory Service
+- Two middleware files — `authenticate.js` and `authorize.js` — ~30 lines total
+
+### authenticate.js — What It Checks
+
+```
+1. Authorization: Bearer <token> header present
+2. JWT signature valid (shared JWT_SECRET)
+3. Token not expired  →  TOKEN_EXPIRED (401)
+4. Claims validation:
+   - userId is a valid UUID
+   - role is one of: admin, manager, viewer
+   - isActive === true
+5. Redis blocklist check via jti
+   →  TOKEN_REVOKED (401) if blocklisted
+6. req.user = decoded payload
+```
+
+### Middleware Order
+
+```
+Idempotency → Authenticate → Authorize → Route Handler
+```
+
+Idempotency runs first — a cache hit returns the response before auth runs, which is correct and intentional.
+
+### RBAC Matrix
+
+| Action                         | admin | manager | viewer |
+| ------------------------------ | ----- | ------- | ------ |
+| View products / stock / orders | ✅    | ✅      | ✅     |
+| Create / update products       | ✅    | ✅      | ❌     |
+| Adjust stock                   | ✅    | ✅      | ❌     |
+| Create orders                  | ✅    | ✅      | ✅     |
+| Confirm / fulfil orders        | ✅    | ✅      | ❌     |
+| Cancel own orders              | ✅    | ✅      | ✅     |
+| Cancel any order               | ✅    | ✅      | ❌     |
+| Manage categories              | ✅    | ❌      | ❌     |
+
+### Token Revocation
+
+Revoked tokens (from Auth Service logout) are blocklisted in Redis by JTI. Inventory Service checks this blocklist on every authenticated request — revocation is immediate.
+
+---
+
+## Observability
+
+### Structured Logging (Pino)
+
+Every log line includes:
+
+| Field    | Description                                                                   |
+| -------- | ----------------------------------------------------------------------------- |
+| traceId  | Unique UUID per request. Same value across all log lines in one request.      |
+| userId   | From JWT payload. Present on all authenticated requests.                      |
+| action   | What happened — `STOCK_ADJUSTED`, `ORDER_CONFIRMED`, `OUTBOX_DELIVERED`, etc. |
+| duration | Request duration in milliseconds.                                             |
+
+### Prometheus Metrics
+
+| Metric                          | Description                                          |
+| ------------------------------- | ---------------------------------------------------- |
+| `http_requests_total`           | Counter. Labels: method, route, status_code.         |
+| `http_request_duration_seconds` | Histogram. Request latency per route.                |
+| `orders_created_total`          | Orders successfully created.                         |
+| `orders_confirmed_total`        | Orders successfully confirmed.                       |
+| `stock_insufficient_total`      | Requests rejected due to insufficient stock.         |
+| `idempotency_cache_hits_total`  | Requests served from Redis idempotency cache.        |
+| `idempotency_db_fallback_total` | Requests served from DB fallback when cache expired. |
+| `outbox_events_created_total`   | Low stock events written to outbox.                  |
+
+### Health Check
+
+```bash
+GET /health
+```
+
+Actively verifies Postgres and Redis connectivity:
 
 ```json
-{
-  "traceId": "b1c2...",
-  "method": "GET",
-  "url": "/products",
-  "status": 200,
-  "duration": 5
-}
-Benefits
-Enables request-level debugging
-Allows correlation of logs across services
-Provides structured, machine-readable logs
+{ "status": "ok", "postgres": "connected", "redis": "connected" }
+```
 
-📈 Prometheus Metrics
-
-The system exposes metrics for monitoring request volume and performance.
-
-Endpoint
-GET /metrics
-Default Metrics
-
-Provided by prom-client:
-
-CPU usage
-Memory usage
-Event loop lag
-Garbage collection stats
-Custom Metrics
-1. HTTP Request Counter
-http_requests_total{method="GET",route="/products",status="200"} 5
-
-Tracks total number of requests per route.
-
-2. Request Duration Histogram
-http_request_duration_seconds_bucket{...}
-
-Tracks latency distribution of requests.
-
-Guarantees
-Every request is tracked
-Latency is measured in seconds
-Metrics follow Prometheus standards
-🩺 Health Check (Dependency-aware)
-
-The system provides a health endpoint that validates external dependencies.
-
-Endpoint
-GET /health
-Response
-{
-  "status": "ok",
-  "postgres": "connected",
-  "redis": "connected"
-}
-Behavior
-Returns 200 OK when all dependencies are healthy
-Returns 503 Service Unavailable if any dependency fails
-
-🧠 Design Decisions
-Trace ID is propagated via headers instead of response body
-Logging and metrics are implemented as middleware for consistency
-Database errors are not exposed directly — mapped to domain errors
-Metrics include both system-level and application-level insights
+Returns `503 Service Unavailable` if any dependency is down — load balancer compatible.
 
 ---
 
-🧪 Testing Strategy
+## Testing
 
-This project follows a production-grade integration testing approach, focusing on system behavior rather than isolated unit testing.
+Integration-style tests using Jest and Supertest. Tests validate system behaviour — not internal functions.
 
-All tests are written using:
+All external dependencies are mocked — no real Postgres, Redis, or Notification Service required.
 
-Jest
-Supertest
-📁 Test Coverage Overview
+```
 src/__tests__/
-├── products.test.js
-├── stock.test.js
-├── stock.concurrency.test.js
-├── stock.idempotency.test.js
-├── orders.test.js
-├── orders.idempotency.test.js
-├── confirmOrder.test.js
-├── confirmOrder.outbox.test.js
-├── order.status.test.js
-🔥 Core Testing Philosophy
+├── setup.js                      # mocks: pg pool, Redis (in-memory Map), axios
+├── products.test.js              # CRUD, soft delete, pagination, SKU uniqueness
+├── stock.test.js                 # adjustments, movements, threshold logic
+├── stock.concurrency.test.js     # concurrent updates — most important test
+├── stock.idempotency.test.js     # cache hit, no side effects on retry
+├── orders.test.js                # full order lifecycle
+├── orders.idempotency.test.js    # same key = same orderId, one DB row
+├── confirmOrder.test.js          # transaction safety, stock deduction
+├── confirmOrder.outbox.test.js   # outbox event written inside transaction
+└── order.status.test.js          # status transition rules
+```
 
-Tests validate real system guarantees:
+### The Concurrency Test — Most Important
 
-Transactions
-Concurrency safety
-Idempotency
-Event consistency (Outbox Pattern)
-Business rule enforcement
+```javascript
+test("concurrent adjustments do not oversell", async () => {
+  // Setup: product with quantity = 10
+  // 10 concurrent requests, each deducting 2 (total requested: 20)
 
-🧱 1. Product & Category Tests
-Covered in: products.test.js
-✅ Create product with valid category → 201
-❌ Invalid category → 404 CATEGORY_NOT_FOUND
-❌ Duplicate SKU → 409 SKU_ALREADY_EXISTS
-✅ Pagination response structure verified
+  const results = await Promise.all(
+    Array.from({ length: 10 }, () =>
+      request(app)
+        .patch(`/stock/${productId}`)
+        .set("X-Idempotency-Key", uuid())
+        .send({ adjustment: -2, reason: "sale" }),
+    ),
+  );
 
-⚙️ 2. Stock Management Tests
-Covered in: stock.test.js
-✅ Increase / decrease stock
-❌ Prevent negative stock (INSUFFICIENT_STOCK)
-✅ Stock movement audit records created
-✅ Threshold logic validated
+  const successes = results.filter((r) => r.status === 200);
+  const failures = results.filter((r) => r.status === 409);
 
-⚡ 3. Concurrency Control (CRITICAL)
-Covered in: stock.concurrency.test.js
+  expect(successes).toHaveLength(5); // 5 × -2 = -10
+  expect(failures).toHaveLength(5);
+  expect(finalStock.quantity).toBe(0); // never negative
+});
+```
 
-Simulates concurrent stock deductions:
+### Full Test Coverage
 
-Initial stock: 10
-10 concurrent requests × -2
-Guarantees:
-✅ Only 5 succeed
-❌ 5 fail with 409
-✅ Final stock = 0 (never negative)
+#### products.test.js
 
-👉 Uses row-level locking (SELECT FOR UPDATE)
+| Test Case                             | Expected                                    |
+| ------------------------------------- | ------------------------------------------- |
+| Create product — valid                | 201 + stock auto-created at quantity 0      |
+| Create product — duplicate SKU        | 409 SKU_ALREADY_EXISTS                      |
+| Create product — inactive category    | 404 CATEGORY_NOT_FOUND                      |
+| Pagination envelope                   | meta.page, meta.total, meta.hasNext present |
+| Soft-deleted product                  | Not returned in list endpoints              |
+| GET /products/:id                     | Includes stock quantity                     |
+| Delete category — has active products | 409 CATEGORY_HAS_ACTIVE_PRODUCTS            |
 
-🔁 4. Idempotency Tests
-Covered in:
-stock.idempotency.test.js
-orders.idempotency.test.js
-Guarantees:
-Same X-Idempotency-Key:
-✅ Returns identical response
-❌ Does NOT execute business logic again
-❌ Does NOT hit DB again
-Verified By:
-Redis cache simulation
-Query count assertions
+#### stock.test.js
 
-📦 5. Order Creation Tests
-Covered in: orders.test.js
-✅ Create order successfully
-❌ Insufficient stock → 400
-✅ Stock deducted during creation (current design)
-✅ Transaction rollback on failure
+| Test Case                 | Expected                                            |
+| ------------------------- | --------------------------------------------------- |
+| Valid positive adjustment | 200 + quantity increased                            |
+| Valid negative adjustment | 200 + quantity decreased                            |
+| Adjustment to exactly 0   | 200 + quantity = 0 (boundary)                       |
+| Adjustment below 0        | 409 INSUFFICIENT_STOCK with available and requested |
+| stock_movements written   | Correct before/after values                         |
+| Unknown reason value      | 400                                                 |
+| Zero adjustment           | 400                                                 |
 
-🔁 6. Order Idempotency (HIGH VALUE)
-Covered in: orders.idempotency.test.js
-✅ Same request key → same orderId
-❌ No duplicate orders created
-❌ DB not queried on retry
+#### stock.concurrency.test.js
 
-🔒 7. Transaction Safety — Confirm Order
-Covered in: confirmOrder.test.js
-Success Case:
-✅ Order → CONFIRMED
-✅ Stock deducted
-✅ Stock movement recorded
-Failure Case:
-❌ Insufficient stock → 409
-✅ Transaction rollback
-❌ No partial updates
+| Test Case                            | Expected                                       |
+| ------------------------------------ | ---------------------------------------------- |
+| 10 concurrent -2 on stock of 10      | 5 succeed, 5 get 409. Final quantity = 0.      |
+| Mixed concurrent adds and deductions | Final = initial + net. Never negative.         |
+| Movement records match successes     | stock_movements count = successful adjustments |
 
-📡 8. Outbox Pattern Validation
-Covered in: confirmOrder.outbox.test.js
-Guarantees:
-✅ Low stock triggers event
-✅ Event written inside transaction
-❌ No event loss on failure
-Verified By:
-Mocking writeEvent
-Ensuring it is called exactly once
+#### orders.test.js
 
-🔄 9. Order Status Transition Rules
-Covered in: order.status.test.js
-Transition	Allowed
-PENDING → CONFIRMED	✅
-PENDING → CANCELLED	✅
-CONFIRMED → FULFILLED	✅
-CONFIRMED → CANCELLED	✅
-FULFILLED → any	❌
-CANCELLED → any	❌
-Guarantees:
-❌ Invalid transitions return 400
-✅ Valid transitions succeed
-🧠 Key Engineering Guarantees
+| Test Case                                | Expected                            |
+| ---------------------------------------- | ----------------------------------- |
+| Create valid order                       | 201 + PENDING + correct totalAmount |
+| unit_price = product.price at order time | Price snapshot confirmed            |
+| Insufficient stock                       | 409 INSUFFICIENT_STOCK              |
+| Empty items array                        | 400                                 |
+| Cancel PENDING order                     | 200 + CANCELLED                     |
+| Cancel FULFILLED order                   | 409 INVALID_STATUS_TRANSITION       |
+| Confirm PENDING order                    | 200 + CONFIRMED + stock deducted    |
+| Confirm — stock insufficient             | 409 + no partial deductions         |
+| Fulfil CONFIRMED order                   | 200 + FULFILLED                     |
+| Fulfil PENDING order                     | 409 INVALID_STATUS_TRANSITION       |
 
-This test suite ensures:
+#### orders.idempotency.test.js
 
-✅ Data Consistency
-No negative stock
-No partial writes
-✅ Concurrency Safety
-No overselling under parallel requests
-✅ Idempotent APIs
-Safe retries without duplication
-✅ Transaction Integrity
-Rollback on failure
-✅ Event Reliability
-Outbox ensures delivery consistency
-⚙️ Test Execution
+| Test Case                      | Expected                                |
+| ------------------------------ | --------------------------------------- |
+| Same key — two POST /orders    | One order row. Same orderId both times. |
+| Redis expired — same key in DB | DB fallback returns existing order.     |
+| Missing idempotency key        | 400 IDEMPOTENCY_KEY_REQUIRED            |
 
-Run all tests:
+#### confirmOrder.outbox.test.js
 
+| Test Case                       | Expected                                  |
+| ------------------------------- | ----------------------------------------- |
+| Low stock after confirm         | outbox_events PENDING row written         |
+| Outbox event inside transaction | writeEvent called with transaction client |
+| Stock above threshold           | No outbox event written                   |
+
+#### order.status.test.js
+
+| Transition            | Expected                         |
+| --------------------- | -------------------------------- |
+| PENDING → CONFIRMED   | ✅ Allowed                       |
+| PENDING → CANCELLED   | ✅ Allowed                       |
+| CONFIRMED → FULFILLED | ✅ Allowed                       |
+| CONFIRMED → CANCELLED | ✅ Allowed                       |
+| FULFILLED → any       | ❌ 409 INVALID_STATUS_TRANSITION |
+| CANCELLED → any       | ❌ 409 INVALID_STATUS_TRANSITION |
+
+### Run Tests
+
+```bash
 npm test
+```
+
+**Outcome:** 9 test suites — full system lifecycle covered — CI-ready.
 
 ---
 
-⚙️ Continuous Integration (CI)
+## CI Pipeline
 
-This project uses GitHub Actions to automatically run tests on every push and pull request.
+GitHub Actions runs on every push to `main` and `develop`, and every pull request.
 
-🚀 What the CI Pipeline Does
-✅ Runs full test suite using Jest
-✅ Validates all critical backend flows:
-Orders (create, confirm, cancel, fulfil)
-Stock management & concurrency
-Idempotency (Redis-backed)
-Outbox pattern (event consistency)
-✅ Prevents merging broken code into main
-✅ Ensures consistent behavior across environments
-🔄 When It Runs
+```
+.github/workflows/ci.yml
+```
 
-The CI pipeline is triggered on:
+**Steps:**
 
-Every push to:
-main
-develop
-Every pull request targeting main
-🧪 Test Environment
+1. Checkout repository
+2. Setup Node.js 20
+3. Install dependencies (`npm ci`)
+4. Run test suite (`npm test`)
 
-The CI pipeline runs in a fully isolated environment:
+**Test environment:**
 
-Database interactions are mocked (no real PostgreSQL required)
-Redis interactions are mocked (no external dependency)
-External services (e.g., notification service) are mocked
+- `NODE_ENV=test`
+- PostgreSQL mocked via `jest.mock()`
+- Redis mocked via in-memory `Map`
+- Axios (Notification Service) mocked
+- No external dependencies required
 
-👉 This ensures:
-
-⚡ Fast test execution
-🔁 Deterministic results (no flaky tests)
-🔒 No dependency on external systems
-🧱 Pipeline Steps
-
-The CI workflow performs the following steps:
-
-Checkout repository
-Setup Node.js environment
-Install dependencies (npm ci)
-Run test suite (npm test)
-📌 Why This Matters
-
-This CI setup ensures:
-
-🚫 No regressions — failing tests block bad code
-🔍 Continuous validation of system behavior
-🏗️ Production-grade development workflow
+```
+Developer Push → GitHub Actions → npm ci → npm test → Pass / Fail
+```
 
 ---
 
-🔒 Advanced Guarantees & System Reliability
+## Advanced System Guarantees
 
-This system goes beyond standard CRUD operations and implements production-grade guarantees to handle real-world edge cases and failure scenarios.
+### Idempotency — Redis + DB Fallback
 
-🔁 Idempotency (Redis + DB Fallback)
-Prevents duplicate order creation during retries or network failures
-Uses Redis for fast response caching
-Falls back to PostgreSQL when cache expires
+Redis cache is fast but ephemeral. When the cache expires, the DB `idempotency_key` column is the durable fallback. A `UNIQUE` constraint on the column prevents duplicate orders even if both cache and fallback are bypassed simultaneously.
 
-Guarantees:
-Same idempotency key → same response
-No duplicate database writes
-Race-condition safe via UNIQUE constraint
-⚡ Concurrency Control (Row-Level Locking)
-Uses PostgreSQL SELECT ... FOR UPDATE
-Prevents overselling under concurrent requests
+### Transaction Safety
 
-Guarantees:
-Stock never goes below zero
-Only valid number of requests succeed
-Safe under parallel load
+All critical operations run inside PostgreSQL transactions. On any failure — application error, DB error, or unexpected crash — the transaction rolls back atomically. No partial writes reach the database.
 
-🧾 Transaction Safety
-All critical operations run inside database transactions
-Guarantees:
-No partial writes
-Automatic rollback on failure
-Strong consistency for stock and orders
+### Outbox Reliability
 
-📡 Outbox Pattern (Event Reliability)
-Events are written inside the same transaction as business logic
-Ensures no event loss during failures
-Guarantees:
-No dual-write problem
-Reliable event delivery
-Eventual consistency with downstream systems
+The outbox worker retries failed deliveries with exponential backoff. After `OUTBOX_MAX_ATTEMPTS` (default: 5), the event is marked `FAILED` and available for manual inspection and replay. No event is silently dropped.
 
-🧠 Reservation Gap Handling
+### Audit Trail
 
-Stock is validated during order creation but deducted during confirmation.
+Every order status transition is recorded:
 
-Edge Case Covered:
-Order A created (stock available)
-Order B confirmed first → consumes stock
-Order A confirm → fails
-Guarantees:
-No overselling across time
-System remains consistent under delayed confirmations
-
-🧾 Audit Logging (Full Traceability)
-
-Every important action is recorded in an audit log:
-
-ORDER_CREATED
-ORDER_CONFIRMED
-ORDER_CANCELLED
-ORDER_FULFILLED
-Guarantees:
-Complete lifecycle tracking
-Debugging and observability
-Production-grade traceability
-
-🧪 Testing Coverage (Enhanced)
-
-The test suite validates real system guarantees, not just functionality.
-
-Key Test Areas
-✅ Order lifecycle (create, confirm, cancel, fulfil)
-✅ Idempotency (Redis + DB fallback)
-✅ Concurrency (parallel stock updates)
-✅ Transaction rollback scenarios
-✅ Outbox event triggering
-✅ Status transition validation
-✅ Reservation gap scenario (real-world edge case)
-✅ Audit log invocation
-
-Testing Approach
-Uses Jest + Supertest
-Mocks external systems (Redis, DB pool, services)
-Focuses on integration-level behavior
+| Event             | Trigger                          |
+| ----------------- | -------------------------------- |
+| `ORDER_CREATED`   | POST /orders success             |
+| `ORDER_CONFIRMED` | POST /orders/:id/confirm success |
+| `ORDER_CANCELLED` | POST /orders/:id/cancel success  |
+| `ORDER_FULFILLED` | POST /orders/:id/fulfil success  |
 
 ---
 
-📊 Observability & Metrics
+## Future Enhancements
 
-This system includes domain-level metrics to monitor real-world behavior, not just infrastructure health.
+The following are part of the system design blueprint but deliberately deferred to keep scope focused on core reliability guarantees:
 
-Metrics are exposed via a /metrics endpoint using Prometheus-compatible format.
+**GET /stock/low** — list all products below their threshold.
+Deferred: the system already triggers `low_stock` events automatically via the Outbox Pattern when stock drops below threshold. A manual polling endpoint is supplementary and lower priority.
 
-🎯 Why Metrics Matter
+**PATCH /stock/:productId/threshold** — update threshold per product at runtime.
+Deferred: the default threshold is set at product creation time. Runtime threshold updates are a low-priority operational feature that adds endpoint surface without changing core system behaviour.
 
-Beyond logs and tests, metrics help answer:
+**DELETE /products/:id** — hard delete a product.
+Deferred: products are soft-deleted via `is_active = false`. Hard delete introduces referential integrity complexity with existing orders and stock movements that reference the product. Soft delete is the safer production pattern.
 
-Are users retrying requests?
-Is Redis cache effective?
-Are orders failing due to stock issues?
-Are events being generated reliably?
+**Stock reservation (reserved_quantity)** — hold stock at order creation, deduct at confirmation.
+Deferred: the current validate-at-create model is simpler and sufficient for this scope. The reservation gap is documented and handled gracefully. Upgrade path: add `reserved_quantity` column to stock, increment on create, decrement on confirm or cancel.
 
-📈 Implemented Metrics
-🛒 Orders
-orders_created_total
-→ Total number of orders created
-orders_confirmed_total
-→ Total number of successfully confirmed orders
-
-🔁 Idempotency
-idempotency_cache_hits_total
-→ Number of times a request was served from Redis cache
-idempotency_db_fallback_total
-→ Number of times DB fallback was used when cache was missed
-
-⚠️ Failures
-stock_insufficient_total
-→ Number of times an order failed due to insufficient stock
-
-📡 Events
-outbox_events_created_total
-→ Number of events written to the outbox
-
-🧠 Design Principles
-Metrics are recorded only on actual events (no double counting)
-Placed at critical decision points:
-After successful operations
-Before throwing domain errors
-Designed to reflect business behavior, not just technical events
-
-🔍 Example Output
-orders_created_total 15
-orders_confirmed_total 12
-idempotency_cache_hits_total 6
-idempotency_db_fallback_total 2
-stock_insufficient_total 3
-outbox_events_created_total 10
-
-🚀 What This Enables
-
-With these metrics, the system can:
-
-Detect retry patterns (client/network issues)
-Monitor cache effectiveness
-Identify stock bottlenecks
-Track order success rate
-Verify event generation reliability
+**Product variants** — size, colour, SKU per variant.
+Deferred: requires a `product_variants` table and stock-per-variant schema. Well-understood extension, wrong priority for current scope.
 
 ---
 
-🔐 Authentication & Authorization (RBAC)
+## Trade-offs
 
-This service integrates with a standalone authentication system and enforces role-based access control (RBAC) at the API layer.
-
-🧠 Design Approach
-
-Authentication is handled using JWT-based verification, while authorization is enforced using role-based middleware.
-
-The service does not call the Auth Service at runtime.
-Instead, it verifies tokens locally using a shared secret.
-
-🔑 Authentication (JWT Validation)
-
-Every protected request must include:
-
-Authorization: Bearer <JWT>
-Validation includes:
-JWT signature verification
-Claim validation:
-userId must be a valid UUID
-role must be one of: admin, manager, viewer
-isActive must be true
-Token revocation check using Redis blocklist (jti)
-
-On success:
-
-req.user = {
-  userId,
-  role,
-  isActive
-};
-🛡️ Authorization (RBAC)
-
-Authorization is enforced using a middleware:
-
-authorize("admin", "manager")
-
-Access is granted only if:
-
-req.user.role ∈ allowedRoles
-⚙️ Middleware Order (Critical)
-
-Middleware execution order is carefully designed:
-
-Idempotency → Authenticate → Authorize → Route Handler
-Why this matters:
-Idempotency must run first to prevent duplicate processing
-Authentication ensures request identity
-Authorization enforces access control
-
-📌 Route-Level RBAC Rules
-🛒 Orders
-Endpoint	Access
-POST /orders	Any authenticated user
-POST /orders/:id/confirm	admin, manager
-POST /orders/:id/cancel	Any authenticated user
-POST /orders/:id/fulfil	admin, manager
-
-### 🗂️ Categories
-
-| Endpoint | Access |
-|--------|--------|
-| GET /categories | Any authenticated user |
-| POST /categories | admin only |
-| PATCH /categories/:id | admin only |
-| DELETE /categories/:id | admin only |
-
-📦 Products
-Endpoint	Access
-POST /products	admin, manager
-GET /products	Any authenticated user
-GET /products/:id	Any authenticated user
-
-📊 Stock
-Endpoint	Access
-PATCH /stock/:productId	admin, manager
-GET /stock/:productId	admin, manager
-
-🚫 Token Revocation (Security)
-
-The system supports immediate token invalidation using a Redis-based blocklist:
-
-Each token contains a unique jti
-Revoked tokens are stored in Redis with TTL
-Every request checks if the token is blocked
-🧪 Testing Strategy
-
-Authentication is mocked in tests to isolate business logic:
-
-authenticate middleware is mocked to inject a test user
-authorize middleware is bypassed
-No real JWT generation required
-
-This ensures:
-
-Fast and deterministic tests
-Focus on core system behavior
-Clean separation of concerns
-🧠 Why This Matters
-
-This design demonstrates:
-
-Secure service-to-service authentication
-Stateless authorization using JWT
-Immediate revocation capability
-Clean separation between authentication and business logic
-Production-grade RBAC enforcement
-
-## 🚧 Future Enhancements
-
-- GET /stock/low — list products below threshold.
-  Deferred: system already triggers low_stock events 
-  automatically via the Outbox Pattern when stock drops 
-  below threshold. Manual polling endpoint is supplementary.
-
-- PATCH /stock/:productId/threshold — update threshold per product.
-  Deferred: default threshold is set at product creation.
-  Runtime updates are a low-priority operational feature.
-
-- DELETE /products/:id — soft delete product.
-  Deferred: products can be deactivated via is_active flag.
-  Hard delete introduces referential integrity complexity
-  with existing orders.
-
-## 📎 Note
-
-This project is being built step-by-step with a focus on correctness, reliability, and real-world system design.
+| Decision                                | Reason                                                                                  | Upgrade Path                                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Pessimistic locking (SELECT FOR UPDATE) | Correct for expected stock contention. Simple to reason about.                          | Optimistic concurrency with version column, or Redis pre-decrement for flash-sale scale.  |
+| Validate-at-create, deduct-at-confirm   | Simpler than full reservation. Gap is documented and handled.                           | Add reserved_quantity column. Background job releases stale reservations.                 |
+| HS256 JWT (shared secret)               | Correct for internal ecosystem. Services are owned and operated together.               | RS256 with JWKS endpoint — only Auth Service holds private key.                           |
+| PostgreSQL for outbox events            | Sufficient at this scale. Simple operational model.                                     | Stream to Kafka topic at high traffic scale. ELK or Grafana Loki for log aggregation.     |
+| Limit+offset pagination                 | Simpler and more explainable than cursor-based.                                         | Cursor-based pagination for large datasets where offset performance degrades.             |
+| Single warehouse                        | Keeps schema clean. All three design problems demonstrable without location complexity. | Add locations table. stock becomes stock_per_location. Transfer orders between locations. |
