@@ -4,17 +4,18 @@ const { writeAuditLog } = require("./auditService"); // 🔥 NEW
 const {
   ordersCreated,
   ordersConfirmed,
+  ordersFulfilled,
+  ordersCancelled,
   idempotencyDbFallback,
   stockInsufficient,
 } = require("../utils/metrics");
 
 const createOrder = async ({ customerId, items, idempotencyKey }) => {
-
   // 🔥 STEP 1 — DB FALLBACK IDEMPOTENCY CHECK
   if (idempotencyKey) {
     const existing = await pool.query(
       "SELECT id, status, total_amount FROM orders WHERE idempotency_key = $1",
-      [idempotencyKey]
+      [idempotencyKey],
     );
 
     if (existing.rows.length > 0) {
@@ -41,11 +42,19 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
 
     // 🔹 Validate + LOCK + DEDUCT stock
     for (const item of items) {
+      // 🔥 CRITICAL VALIDATION (NEW)
+      if (item.quantity <= 0 || !Number.isInteger(item.quantity)) {
+        throw {
+          status: 400,
+          code: "INVALID_QUANTITY",
+        };
+      }
+
       const { rows } = await client.query(
         `SELECT quantity FROM stock
          WHERE product_id = $1
          FOR UPDATE`,
-        [item.productId]
+        [item.productId],
       );
 
       if (rows.length === 0) {
@@ -69,12 +78,12 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
 
       await client.query(
         `UPDATE stock SET quantity = $1 WHERE product_id = $2`,
-        [newQty, item.productId]
+        [newQty, item.productId],
       );
 
       const priceRes = await client.query(
         `SELECT price FROM products WHERE id = $1`,
-        [item.productId]
+        [item.productId],
       );
 
       if (priceRes.rows.length === 0) {
@@ -99,16 +108,15 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
         `INSERT INTO orders (customer_id, idempotency_key, total_amount)
          VALUES ($1, $2, $3)
          RETURNING id, status`,
-        [customerId, idempotencyKey, totalAmount]
+        [customerId, idempotencyKey, totalAmount],
       );
 
       order = orderResult.rows[0];
-
     } catch (err) {
       if (err.code === "23505") {
         const existing = await pool.query(
           "SELECT id, status, total_amount FROM orders WHERE idempotency_key = $1",
-          [idempotencyKey]
+          [idempotencyKey],
         );
 
         const existingOrder = existing.rows[0];
@@ -131,7 +139,7 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit_price)
          VALUES ($1, $2, $3, $4)`,
-        [order.id, item.productId, item.quantity, item.unit_price]
+        [order.id, item.productId, item.quantity, item.unit_price],
       );
     }
 
@@ -153,7 +161,6 @@ const createOrder = async ({ customerId, items, idempotencyKey }) => {
       totalAmount,
       items: orderItems,
     };
-
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -168,10 +175,9 @@ const confirmOrder = async ({ orderId, userId }) => {
   try {
     await client.query("BEGIN");
 
-    const orderRes = await client.query(
-      `SELECT * FROM orders WHERE id = $1`,
-      [orderId]
-    );
+    const orderRes = await client.query(`SELECT * FROM orders WHERE id = $1`, [
+      orderId,
+    ]);
 
     if (orderRes.rows.length === 0) {
       throw { status: 404, code: "ORDER_NOT_FOUND" };
@@ -188,7 +194,7 @@ const confirmOrder = async ({ orderId, userId }) => {
 
     const itemsRes = await client.query(
       `SELECT * FROM order_items WHERE order_id = $1`,
-      [orderId]
+      [orderId],
     );
 
     const items = itemsRes.rows;
@@ -199,7 +205,7 @@ const confirmOrder = async ({ orderId, userId }) => {
          FROM stock
          WHERE product_id = $1
          FOR UPDATE`,
-        [item.product_id]
+        [item.product_id],
       );
 
       const stock = stockRes.rows[0];
@@ -221,7 +227,7 @@ const confirmOrder = async ({ orderId, userId }) => {
         `UPDATE stock
          SET quantity = $1, updated_at = NOW()
          WHERE product_id = $2`,
-        [newQty, item.product_id]
+        [newQty, item.product_id],
       );
 
       await client.query(
@@ -235,7 +241,7 @@ const confirmOrder = async ({ orderId, userId }) => {
           newQty,
           "sale",
           userId,
-        ]
+        ],
       );
 
       if (
@@ -254,7 +260,7 @@ const confirmOrder = async ({ orderId, userId }) => {
       `UPDATE orders
        SET status = 'CONFIRMED'
        WHERE id = $1`,
-      [orderId]
+      [orderId],
     );
 
     // 🔥 AUDIT LOG (CONFIRM)
@@ -276,7 +282,6 @@ const confirmOrder = async ({ orderId, userId }) => {
       orderId,
       status: "CONFIRMED",
     };
-
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -287,36 +292,23 @@ const confirmOrder = async ({ orderId, userId }) => {
 
 const cancelOrder = async ({ orderId }) => {
   const client = await pool.connect();
-
   try {
     await client.query("BEGIN");
 
-    const res = await client.query(
-      `SELECT status FROM orders WHERE id = $1`,
-      [orderId]
-    );
-
-    if (res.rows.length === 0) {
-      throw { status: 404, code: "ORDER_NOT_FOUND" };
-    }
+    const res = await client.query(`SELECT status FROM orders WHERE id = $1`, [
+      orderId,
+    ]);
+    if (res.rows.length === 0) throw { status: 404, code: "ORDER_NOT_FOUND" };
 
     const order = res.rows[0];
-
     if (order.status !== "PENDING") {
-      throw {
-        status: 400,
-        code: "INVALID_ORDER_STATE",
-      };
+      throw { status: 400, code: "INVALID_ORDER_STATE" };
     }
 
-    await client.query(
-      `UPDATE orders
-       SET status = 'CANCELLED'
-       WHERE id = $1`,
-      [orderId]
-    );
+    await client.query(`UPDATE orders SET status = 'CANCELLED' WHERE id = $1`, [
+      orderId,
+    ]);
 
-    // 🔥 AUDIT LOG (CANCEL)
     await writeAuditLog(client, {
       entityType: "ORDER",
       entityId: orderId,
@@ -325,11 +317,10 @@ const cancelOrder = async ({ orderId }) => {
 
     await client.query("COMMIT");
 
-    return {
-      orderId,
-      status: "CANCELLED",
-    };
+    // ✅ METRIC: Increment after successful commit
+    ordersCancelled.inc();
 
+    return { orderId, status: "CANCELLED" };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -340,36 +331,23 @@ const cancelOrder = async ({ orderId }) => {
 
 const fulfilOrder = async ({ orderId }) => {
   const client = await pool.connect();
-
   try {
     await client.query("BEGIN");
 
-    const res = await client.query(
-      `SELECT status FROM orders WHERE id = $1`,
-      [orderId]
-    );
-
-    if (res.rows.length === 0) {
-      throw { status: 404, code: "ORDER_NOT_FOUND" };
-    }
+    const res = await client.query(`SELECT status FROM orders WHERE id = $1`, [
+      orderId,
+    ]);
+    if (res.rows.length === 0) throw { status: 404, code: "ORDER_NOT_FOUND" };
 
     const order = res.rows[0];
-
     if (order.status !== "CONFIRMED") {
-      throw {
-        status: 400,
-        code: "INVALID_ORDER_STATE",
-      };
+      throw { status: 400, code: "INVALID_ORDER_STATE" };
     }
 
-    await client.query(
-      `UPDATE orders
-       SET status = 'FULFILLED'
-       WHERE id = $1`,
-      [orderId]
-    );
+    await client.query(`UPDATE orders SET status = 'FULFILLED' WHERE id = $1`, [
+      orderId,
+    ]);
 
-    // 🔥 AUDIT LOG (FULFIL)
     await writeAuditLog(client, {
       entityType: "ORDER",
       entityId: orderId,
@@ -378,11 +356,10 @@ const fulfilOrder = async ({ orderId }) => {
 
     await client.query("COMMIT");
 
-    return {
-      orderId,
-      status: "FULFILLED",
-    };
+    // ✅ METRIC: Increment after successful commit
+    ordersFulfilled.inc();
 
+    return { orderId, status: "FULFILLED" };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

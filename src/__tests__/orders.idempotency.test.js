@@ -1,9 +1,14 @@
-jest.mock("../api/middlewares/authenticate", () =>
-  require("../__mocks__/authMiddleware").authenticate
+// Override global setup mock — this test needs real idempotency middleware
+jest.unmock("../api/middlewares/idempotency");
+
+jest.mock(
+  "../api/middlewares/authenticate",
+  () => require("../__mocks__/authMiddleware").authenticate,
 );
 
-jest.mock("../api/middlewares/authorize", () =>
-  require("../__mocks__/authMiddleware").authorize
+jest.mock(
+  "../api/middlewares/authorize",
+  () => require("../__mocks__/authMiddleware").authorize,
 );
 
 const request = require("supertest");
@@ -78,7 +83,7 @@ describe("Orders Idempotency", () => {
       JSON.stringify({
         status: 201,
         body: first.body,
-      })
+      }),
     );
 
     const second = await request(app)
@@ -135,3 +140,4 @@ describe("Orders Idempotency", () => {
     expect(pool.connect).not.toHaveBeenCalled();
   });
 });
+

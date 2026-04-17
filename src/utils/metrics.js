@@ -1,29 +1,24 @@
+const redis = require("../db/redis");
 const client = require("prom-client");
 
-// create registry
 const register = new client.Registry();
 
-// collect default metrics (CPU, memory, etc.)
 client.collectDefaultMetrics({ register });
 
-// custom metrics
-
-// total HTTP requests
+// --- HTTP Metrics ---
 const httpRequestsTotal = new client.Counter({
   name: "http_requests_total",
   help: "Total number of HTTP requests",
   labelNames: ["method", "route", "status"],
 });
 
-// request duration
 const httpRequestDuration = new client.Histogram({
   name: "http_request_duration_seconds",
   help: "HTTP request duration in seconds",
   labelNames: ["method", "route", "status"],
 });
 
-// 🔥 NEW METRICS
-
+// --- Business Metrics ---
 const ordersCreated = new client.Counter({
   name: "orders_created_total",
   help: "Total number of orders created",
@@ -32,6 +27,16 @@ const ordersCreated = new client.Counter({
 const ordersConfirmed = new client.Counter({
   name: "orders_confirmed_total",
   help: "Total number of orders confirmed",
+});
+
+const ordersFulfilled = new client.Counter({
+  name: "orders_fulfilled_total",
+  help: "Total number of orders successfully fulfilled",
+});
+
+const ordersCancelled = new client.Counter({
+  name: "orders_cancelled_total",
+  help: "Total number of orders cancelled",
 });
 
 const idempotencyCacheHits = new client.Counter({
@@ -54,11 +59,13 @@ const outboxEventsCreated = new client.Counter({
   help: "Number of outbox events created",
 });
 
-// register metrics
+// Register all metrics
 register.registerMetric(httpRequestsTotal);
 register.registerMetric(httpRequestDuration);
 register.registerMetric(ordersCreated);
 register.registerMetric(ordersConfirmed);
+register.registerMetric(ordersFulfilled);
+register.registerMetric(ordersCancelled);
 register.registerMetric(idempotencyCacheHits);
 register.registerMetric(idempotencyDbFallback);
 register.registerMetric(stockInsufficient);
@@ -70,6 +77,8 @@ module.exports = {
   httpRequestDuration,
   ordersCreated,
   ordersConfirmed,
+  ordersFulfilled,
+  ordersCancelled,
   idempotencyCacheHits,
   idempotencyDbFallback,
   stockInsufficient,

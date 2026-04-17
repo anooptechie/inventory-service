@@ -1,5 +1,27 @@
 // src/__tests__/setup.js
 
+// 🔹 Mock idempotency middleware — unit tests skip key requirement
+jest.mock("../api/middlewares/idempotency", () => {
+  return () => (req, res, next) => next();
+});
+
+// 🔹 Mock authenticate middleware — inject test user
+jest.mock("../api/middlewares/authenticate", () => {
+  return (req, res, next) => {
+    req.user = {
+      userId: "00000000-0000-0000-0000-000000000001",
+      role: "admin",
+      isActive: true,
+    };
+    next();
+  };
+});
+
+// 🔹 Mock authorize middleware — always allow in unit tests
+jest.mock("../api/middlewares/authorize", () => {
+  return () => (req, res, next) => next();
+});
+
 // 🔹 Mock Postgres pool
 jest.mock("../db/postgres", () => {
   return {
@@ -21,10 +43,10 @@ jest.mock("../db/redis", () => {
   };
 });
 
-// 🔹 Mock Axios (for future use)
+// 🔹 Mock Axios
 jest.mock("axios");
 
-// 🔹 Mock UUID (fix ESM issue)
+// 🔹 Mock UUID
 jest.mock("uuid", () => ({
   v4: () => "test-trace-id",
 }));
