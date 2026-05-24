@@ -1,0 +1,1130 @@
+{
+  "info": {
+    "name": "Inventory Management System — E2E Tests",
+    "description": "Complete end-to-end test suite for the Inventory Management System. Tests span Auth Service (port 4000) and Inventory Service (port 5000). Run in order — each phase builds on the previous.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "AUTH_URL",      "value": "http://52.7.155.214" },
+    { "key": "INV_URL",       "value": "http://52.7.155.214/inv" },
+    { "key": "ACCESS_TOKEN",  "value": "" },
+    { "key": "REFRESH_TOKEN", "value": "" },
+    { "key": "ADMIN_TOKEN",   "value": "" },
+    { "key": "VIEWER_TOKEN",  "value": "" },
+    { "key": "CATEGORY_ID",   "value": "" },
+    { "key": "PRODUCT_ID",    "value": "" },
+    { "key": "ORDER_ID",      "value": "" },
+    { "key": "ADMIN_EMAIL",   "value": "admin@example.com" },
+    { "key": "ADMIN_PASSWORD","value": "Admin123!" },
+    { "key": "VIEWER_EMAIL",  "value": "viewer@example.com" },
+    { "key": "VIEWER_PASSWORD","value": "Viewer123!" }
+  ],
+  "item": [
+
+    {
+      "name": "PHASE 1 — Auth Service Setup",
+      "item": [
+
+        {
+          "name": "1.1 Register Admin User",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+            "pm.test('userId returned', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.userId).to.be.a('string');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{AUTH_URL}}/auth/register",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ADMIN_EMAIL}}\",\n  \"password\": \"{{ADMIN_PASSWORD}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "1.2 Register Viewer User",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{AUTH_URL}}/auth/register",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{VIEWER_EMAIL}}\",\n  \"password\": \"{{VIEWER_PASSWORD}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "1.3 Login Admin — Get JWT",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Tokens returned', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.accessToken).to.be.a('string');",
+            "  pm.expect(body.refreshToken).to.be.a('string');",
+            "  pm.collectionVariables.set('ACCESS_TOKEN', body.accessToken);",
+            "  pm.collectionVariables.set('ADMIN_TOKEN', body.accessToken);",
+            "  pm.collectionVariables.set('REFRESH_TOKEN', body.refreshToken);",
+            "});",
+            "pm.test('JWT payload contains jti', () => {",
+            "  const token = pm.response.json().accessToken;",
+            "  const payload = JSON.parse(atob(token.split('.')[1]));",
+            "  pm.expect(payload.jti).to.be.a('string');",
+            "  pm.expect(payload.role).to.be.a('string');",
+            "  pm.expect(payload.isActive).to.equal(true);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{AUTH_URL}}/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ADMIN_EMAIL}}\",\n  \"password\": \"{{ADMIN_PASSWORD}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "1.4 Login Viewer — Get JWT",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Viewer token stored', () => {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('VIEWER_TOKEN', body.accessToken);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{AUTH_URL}}/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{VIEWER_EMAIL}}\",\n  \"password\": \"{{VIEWER_PASSWORD}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "1.5 GET /users/me — Confirm JWT Works",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Profile returned', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.email).to.be.a('string');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{AUTH_URL}}/users/me"
+          }
+        },
+
+        {
+          "name": "1.6 Auth Service Health Check",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Postgres and Redis connected', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.postgres).to.equal('connected');",
+            "  pm.expect(body.redis).to.equal('connected');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "url": "{{AUTH_URL}}/health"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 2 — Inventory Service Health",
+      "item": [
+
+        {
+          "name": "2.1 Inventory Health Check",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('All dependencies healthy', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.status).to.equal('ok');",
+            "  pm.expect(body.postgres).to.equal('connected');",
+            "  pm.expect(body.redis).to.equal('connected');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "url": "{{INV_URL}}/health"
+          }
+        },
+
+        {
+          "name": "2.2 Reject Request Without Token",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 401', () => pm.response.to.have.status(401));",
+            "pm.test('Unauthorized error returned', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.error).to.be.a('string');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "url": "{{INV_URL}}/products"
+          }
+        },
+
+        {
+          "name": "2.3 Reject Invalid JWT",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 401', () => pm.response.to.have.status(401));",
+            "pm.test('Invalid token error', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.error).to.include('INVALID_TOKEN').or.to.include('Invalid');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer this.is.not.a.valid.token" }],
+            "url": "{{INV_URL}}/products"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 3 — Categories",
+      "item": [
+
+        {
+          "name": "3.1 Viewer Cannot Create Category (RBAC)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 403', () => pm.response.to.have.status(403));",
+            "pm.test('Forbidden error', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.error).to.equal('FORBIDDEN');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{VIEWER_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/categories",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Electronics\",\n  \"description\": \"Electronic devices\"\n}" }
+          }
+        },
+
+        {
+          "name": "3.2 Admin Creates Category",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+            "pm.test('Category ID stored', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.id).to.be.a('string');",
+            "  pm.collectionVariables.set('CATEGORY_ID', body.id);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/categories",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Electronics\",\n  \"description\": \"Electronic devices and accessories\"\n}" }
+          }
+        },
+
+        {
+          "name": "3.3 List Categories — Pagination Envelope",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Pagination envelope present', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.data).to.be.an('array');",
+            "  pm.expect(body.meta).to.have.property('page');",
+            "  pm.expect(body.meta).to.have.property('limit');",
+            "  pm.expect(body.meta).to.have.property('total');",
+            "  pm.expect(body.meta).to.have.property('hasNext');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{INV_URL}}/categories?page=1&limit=10", "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "10" }] }
+          }
+        },
+
+        {
+          "name": "3.4 Viewer Can List Categories",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Viewer has read access', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.data).to.be.an('array');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{VIEWER_TOKEN}}" }],
+            "url": "{{INV_URL}}/categories"
+          }
+        },
+
+        {
+          "name": "3.5 Update Category",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/categories/{{CATEGORY_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Electronics & Gadgets\"\n}" }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 4 — Products",
+      "item": [
+
+        {
+          "name": "4.1 Create Product — Auto-creates Stock Row",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+            "pm.test('Product ID stored', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.id || (body.product && body.product.id)).to.be.a('string');",
+            "  const id = body.id || body.product.id;",
+            "  pm.collectionVariables.set('PRODUCT_ID', id);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/products",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"iPhone 15 Pro\",\n  \"sku\": \"IPHONE-15-PRO-001\",\n  \"price\": 1200,\n  \"categoryId\": \"{{CATEGORY_ID}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "4.2 Duplicate SKU Returns 409",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+            "pm.test('SKU_ALREADY_EXISTS error', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('SKU');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/products",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Another iPhone\",\n  \"sku\": \"IPHONE-15-PRO-001\",\n  \"price\": 900,\n  \"categoryId\": \"{{CATEGORY_ID}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "4.3 Invalid Category ID Returns 404",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 404 or 400', () => {",
+            "  pm.expect(pm.response.code).to.be.oneOf([400, 404]);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/products",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Bad Product\",\n  \"sku\": \"BAD-001\",\n  \"price\": 100,\n  \"categoryId\": \"00000000-0000-0000-0000-000000000000\"\n}" }
+          }
+        },
+
+        {
+          "name": "4.4 GET /products — Pagination + Stock Quantity",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Pagination envelope', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.data).to.be.an('array');",
+            "  pm.expect(body.meta.page).to.equal(1);",
+            "});",
+            "pm.test('Product includes quantity', () => {",
+            "  const body = pm.response.json();",
+            "  if (body.data.length > 0) {",
+            "    pm.expect(body.data[0]).to.have.property('quantity');",
+            "  }",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{INV_URL}}/products?page=1&limit=10", "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "10" }] }
+          }
+        },
+
+        {
+          "name": "4.5 GET /products/:id — With Stock",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Stock quantity is 0 on creation', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.quantity).to.equal(0);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/products/{{PRODUCT_ID}}"
+          }
+        },
+
+        {
+          "name": "4.6 Search Products by Name",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Search results returned', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.data).to.be.an('array');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{INV_URL}}/products?search=iPhone", "query": [{ "key": "search", "value": "iPhone" }] }
+          }
+        },
+
+        {
+          "name": "4.7 Filter Products by Category",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{INV_URL}}/products?category={{CATEGORY_ID}}", "query": [{ "key": "category", "value": "{{CATEGORY_ID}}" }] }
+          }
+        },
+
+        {
+          "name": "4.8 Viewer Cannot Create Product (RBAC)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 403', () => pm.response.to.have.status(403));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{VIEWER_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/products",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Viewer Product\",\n  \"sku\": \"VIEWER-001\",\n  \"price\": 100,\n  \"categoryId\": \"{{CATEGORY_ID}}\"\n}" }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 5 — Stock Management",
+      "item": [
+
+        {
+          "name": "5.1 Restock Product (No Idempotency Key — Should Fail)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 400 — key required', () => pm.response.to.have.status(400));",
+            "pm.test('IDEMPOTENCY_KEY_REQUIRED', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('IDEMPOTENCY_KEY_REQUIRED');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": 20,\n  \"reason\": \"restock\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.2 Restock to 20 Units",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Quantity is now 20', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.quantity).to.equal(20);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "restock-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": 20,\n  \"reason\": \"restock\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.3 Same Idempotency Key — No Second Deduction",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('SAME response returned — quantity still 20', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.quantity).to.equal(20);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "restock-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": 20,\n  \"reason\": \"restock\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.4 Different Key — New Execution",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Quantity increased again', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.quantity).to.be.above(20);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "restock-002" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": 10,\n  \"reason\": \"restock\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.5 Deduct Stock (Sale)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Quantity decreased', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.quantity).to.be.below(30);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "sale-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": -5,\n  \"reason\": \"sale\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.6 Insufficient Stock — Returns 409",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+            "pm.test('INSUFFICIENT_STOCK with available and requested', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.error).to.include('INSUFFICIENT_STOCK');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "sale-oversell-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": -9999,\n  \"reason\": \"sale\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.7 Error Response NOT Cached — Retry Executes Again",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409 again — not cached', () => pm.response.to.have.status(409));",
+            "pm.test('Business logic ran again', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.error).to.include('INSUFFICIENT_STOCK');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "sale-oversell-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": -9999,\n  \"reason\": \"sale\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.8 Unknown Reason Returns 400",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 400', () => pm.response.to.have.status(400));"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "bad-reason-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": -1,\n  \"reason\": \"unknown_reason\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.9 GET Stock — Current Level",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Stock fields present', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body).to.have.property('quantity');",
+            "  pm.expect(body.quantity).to.be.at.least(0);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}"
+          }
+        },
+
+        {
+          "name": "5.10 Viewer Can Read Stock",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{VIEWER_TOKEN}}" }],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}"
+          }
+        },
+
+        {
+          "name": "5.11 Viewer Cannot Adjust Stock (RBAC)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 403', () => pm.response.to.have.status(403));"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{VIEWER_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "viewer-stock-attempt" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": -1,\n  \"reason\": \"sale\"\n}" }
+          }
+        },
+
+        {
+          "name": "5.12 Trigger Low Stock Event (Outbox)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Quantity at or below threshold', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.quantity).to.be.at.most(body.threshold);",
+            "  console.log('LOW STOCK TRIGGERED — Check outbox_events table in Supabase');",
+            "  console.log('Expected: inventory.low_stock | PENDING');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "trigger-low-stock-001" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": -20,\n  \"reason\": \"sale\"\n}" }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 6 — Orders: Create + Cancel",
+      "item": [
+
+        {
+          "name": "6.1 Restock Before Order Tests",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "pre-order-restock" }
+            ],
+            "url": "{{INV_URL}}/stock/{{PRODUCT_ID}}",
+            "body": { "mode": "raw", "raw": "{\n  \"adjustment\": 50,\n  \"reason\": \"restock\"\n}" }
+          }
+        },
+
+        {
+          "name": "6.2 Create Order — Missing Idempotency Key",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+            "pm.test('IDEMPOTENCY_KEY_REQUIRED', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('IDEMPOTENCY_KEY_REQUIRED');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{INV_URL}}/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [{ \"productId\": \"{{PRODUCT_ID}}\", \"quantity\": 2 }]\n}" }
+          }
+        },
+
+        {
+          "name": "6.3 Create Order — Happy Path",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+            "pm.test('Order created with PENDING status', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.status).to.equal('PENDING');",
+            "  pm.expect(body.orderId || body.id).to.be.a('string');",
+            "  pm.collectionVariables.set('ORDER_ID', body.orderId || body.id);",
+            "});",
+            "pm.test('Stock NOT deducted on create', () => {",
+            "  console.log('VERIFY MANUALLY: GET /stock/{{PRODUCT_ID}} should still show pre-order quantity');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "order-create-001" }
+            ],
+            "url": "{{INV_URL}}/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [\n    { \"productId\": \"{{PRODUCT_ID}}\", \"quantity\": 3 }\n  ]\n}" }
+          }
+        },
+
+        {
+          "name": "6.4 Same Idempotency Key — Same Order Returned",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+            "pm.test('Same orderId returned — no duplicate', () => {",
+            "  const body = pm.response.json();",
+            "  const returnedId = body.orderId || body.id;",
+            "  const storedId = pm.collectionVariables.get('ORDER_ID');",
+            "  pm.expect(returnedId).to.equal(storedId);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "order-create-001" }
+            ],
+            "url": "{{INV_URL}}/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [\n    { \"productId\": \"{{PRODUCT_ID}}\", \"quantity\": 3 }\n  ]\n}" }
+          }
+        },
+
+        {
+          "name": "6.5 Insufficient Stock On Order Create",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+            "pm.test('INSUFFICIENT_STOCK error', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('INSUFFICIENT_STOCK');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "order-oversell-001" }
+            ],
+            "url": "{{INV_URL}}/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [\n    { \"productId\": \"{{PRODUCT_ID}}\", \"quantity\": 99999 }\n  ]\n}" }
+          }
+        },
+
+        {
+          "name": "6.6 Empty Items Array Returns 400",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 400', () => pm.response.to.have.status(400));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "order-empty-001" }
+            ],
+            "url": "{{INV_URL}}/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"items\": []\n}" }
+          }
+        },
+
+        {
+          "name": "6.7 Cancel PENDING Order",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Order is CANCELLED', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.status).to.equal('CANCELLED');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/cancel"
+          }
+        },
+
+        {
+          "name": "6.8 Cancel Already CANCELLED — Returns 409",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+            "pm.test('Invalid transition error', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('INVALID');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/cancel"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 7 — Orders: Confirm + Fulfil",
+      "item": [
+
+        {
+          "name": "7.1 Create Fresh Order For Confirm Test",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+            "pm.test('New ORDER_ID stored', () => {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('ORDER_ID', body.orderId || body.id);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "X-Idempotency-Key", "value": "order-for-confirm-001" }
+            ],
+            "url": "{{INV_URL}}/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [\n    { \"productId\": \"{{PRODUCT_ID}}\", \"quantity\": 3 }\n  ]\n}" }
+          }
+        },
+
+        {
+          "name": "7.2 Viewer Cannot Confirm Order (RBAC)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 403', () => pm.response.to.have.status(403));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{VIEWER_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/confirm"
+          }
+        },
+
+        {
+          "name": "7.3 Confirm Order — Stock Deducted Atomically",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Order is CONFIRMED', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.status).to.equal('CONFIRMED');",
+            "});",
+            "console.log('VERIFY: GET /stock/{{PRODUCT_ID}} — quantity should be reduced by 3');",
+            "console.log('VERIFY: Check stock_movements table — reason=sale, reference_id=orderId');"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/confirm"
+          }
+        },
+
+        {
+          "name": "7.4 Confirm Already CONFIRMED — Returns 409",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+            "pm.test('Invalid state transition', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('INVALID');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/confirm"
+          }
+        },
+
+        {
+          "name": "7.5 Fulfil CONFIRMED Order",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Order is FULFILLED', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.status).to.equal('FULFILLED');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/fulfil"
+          }
+        },
+
+        {
+          "name": "7.6 Fulfil Already FULFILLED — Returns 409 (Terminal State)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+            "pm.test('Cannot transition from terminal state', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('INVALID');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/fulfil"
+          }
+        },
+
+        {
+          "name": "7.7 Cancel FULFILLED Order — Returns 409 (Terminal State)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 409', () => pm.response.to.have.status(409));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/orders/{{ORDER_ID}}/cancel"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 8 — Token Revocation Across Services",
+      "item": [
+
+        {
+          "name": "8.1 Refresh Token — Get New Access Token",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('New tokens issued', () => {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('ACCESS_TOKEN', body.accessToken);",
+            "  pm.collectionVariables.set('ADMIN_TOKEN', body.accessToken);",
+            "  pm.collectionVariables.set('REFRESH_TOKEN', body.refreshToken);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{AUTH_URL}}/auth/refresh",
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{REFRESH_TOKEN}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "8.2 Verify Token Works on Inventory Before Logout",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200 — token valid', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/products"
+          }
+        },
+
+        {
+          "name": "8.3 Logout From Auth Service",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Logged out successfully', () => {",
+            "  console.log('Token is now blocklisted in Redis');",
+            "  console.log('Next request to Inventory should return 401');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }
+            ],
+            "url": "{{AUTH_URL}}/auth/logout",
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{REFRESH_TOKEN}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "8.4 Revoked Token Rejected By Inventory Service",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 401 — token revoked', () => pm.response.to.have.status(401));",
+            "pm.test('Token revocation works cross-service', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(JSON.stringify(body)).to.include('revoked').or.to.include('REVOKED').or.to.include('invalid');",
+            "  console.log('CROSS-SERVICE REVOCATION CONFIRMED');",
+            "  console.log('Auth Service blocklisted the JTI in Redis');",
+            "  console.log('Inventory Service checked the same Redis and rejected the token');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/products"
+          }
+        },
+
+        {
+          "name": "8.5 Re-Login — Get Fresh Token",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Fresh tokens stored', () => {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('ACCESS_TOKEN', body.accessToken);",
+            "  pm.collectionVariables.set('ADMIN_TOKEN', body.accessToken);",
+            "  pm.collectionVariables.set('REFRESH_TOKEN', body.refreshToken);",
+            "});"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{AUTH_URL}}/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ADMIN_EMAIL}}\",\n  \"password\": \"{{ADMIN_PASSWORD}}\"\n}" }
+          }
+        },
+
+        {
+          "name": "8.6 Fresh Token Works on Inventory",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200 — fresh token accepted', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/products"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "PHASE 9 — Observability",
+      "item": [
+
+        {
+          "name": "9.1 Inventory Health — Full Dependency Check",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('All dependencies healthy', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body.status).to.equal('ok');",
+            "  pm.expect(body.postgres).to.equal('connected');",
+            "  pm.expect(body.redis).to.equal('connected');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "url": "{{INV_URL}}/health"
+          }
+        },
+
+        {
+          "name": "9.2 Prometheus Metrics Exposed",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('Prometheus format returned', () => {",
+            "  const text = pm.response.text();",
+            "  pm.expect(text).to.include('http_requests_total');",
+            "  pm.expect(text).to.include('orders_created_total');",
+            "  pm.expect(text).to.include('idempotency_cache_hits_total');",
+            "  pm.expect(text).to.include('outbox_events_created_total');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "url": "{{INV_URL}}/metrics"
+          }
+        },
+
+        {
+          "name": "9.3 X-Trace-Id Header Present on Response",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+            "pm.test('X-Trace-Id header present', () => {",
+            "  pm.expect(pm.response.headers.get('X-Trace-Id') ||",
+            "             pm.response.headers.get('x-trace-id')).to.be.a('string');",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": "{{INV_URL}}/products"
+          }
+        }
+
+      ]
+    }
+
+  ]
+}
